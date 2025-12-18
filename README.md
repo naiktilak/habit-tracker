@@ -12,28 +12,40 @@ HabitSync is a React-based habit tracking application that allows users to log d
 
 ## 🛠️ Tech Stack
 
-- **Frontend:** React, Tailwind CSS, Lucide Icons
+- **Frontend:** React, Tailwind CSS (via CDN), Lucide Icons
 - **Logic:** Date-fns for time management
 - **AI:** Google GenAI SDK
+- **Build Tool:** Vite
 
-## 📦 Installation
+## 📦 Installation & Setup
 
-1. Clone the repository:
+1. **Clone the repository:**
    ```bash
    git clone https://github.com/yourusername/habitsync.git
+   cd habitsync
    ```
-2. Install dependencies:
+
+2. **Install dependencies:**
    ```bash
    npm install
    ```
-3. Create a `.env` file in the root directory and add your Google Gemini API key:
-   ```
-   API_KEY=your_gemini_api_key_here
-   ```
-4. Start the development server:
+
+3. **Configure Environment Variables:**
+   - Create a `.env` file in the root directory.
+   - You can copy the example file:
+     ```bash
+     cp .env.example .env
+     ```
+   - Open `.env` and add your Google Gemini API key:
+     ```
+     GEMINI_API_KEY=your_gemini_api_key_here
+     ```
+
+4. **Start the development server:**
    ```bash
-   npm start
+   npm run dev
    ```
+   The application will be available at `http://localhost:3000`.
 
 ## ⚠️ Important Note on Data Persistence
 
@@ -51,5 +63,5 @@ This app is ready to be deployed on **Vercel** or **Netlify**.
 1. Push your code to GitHub.
 2. Login to Vercel/Netlify.
 3. Import the repository.
-4. Add the `API_KEY` in the deployment Environment Variables settings.
+4. Add the `GEMINI_API_KEY` in the deployment Environment Variables settings.
 5. Deploy!
