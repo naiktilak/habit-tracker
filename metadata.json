@@ -1,0 +1,5 @@
+{
+  "name": "HabitSync - Habit Tracker",
+  "description": "A collaborative habit tracking application allowing users to track daily activities, share progress with friends in groups, visualize analytics, and get AI-powered insights.",
+  "requestFramePermissions": []
+}
