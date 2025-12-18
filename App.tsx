@@ -463,19 +463,6 @@ const App: React.FC = () => {
 
           <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
 
-            {showDemoBanner && (
-              <div className="bg-indigo-600 text-white px-4 py-2 text-xs md:text-sm font-medium flex justify-between items-center shadow-md z-50">
-                <div className="flex items-center gap-2">
-                   <Icons.BrainCircuit className="w-4 h-4" />
-                   <span><strong>Local Demo:</strong> Data is saved in this browser only. Cloud sync is not enabled for this version.</span>
-                </div>
-                <button onClick={() => setShowDemoBanner(false)} className="opacity-80 hover:opacity-100">
-                   <Icons.X className="w-4 h-4" />
-                </button>
-              </div>
-            )}
-
-
             <header className="bg-white border-b border-gray-200 p-4 flex justify-between items-center shrink-0">
               <div className="flex items-center gap-3">
                  <button onClick={() => setShowMobileMenu(true)} className="md:hidden text-gray-600">
@@ -663,7 +650,7 @@ const App: React.FC = () => {
               </form>
           </Modal>
 
-          
+
           <Modal isOpen={isManageGroupModalOpen} onClose={() => setIsManageGroupModalOpen(false)} title={`Manage ${activeGroup?.name}`}>
               <div className="space-y-4">
                  <p className="text-sm text-gray-600 mb-2">Members of this group:</p>
