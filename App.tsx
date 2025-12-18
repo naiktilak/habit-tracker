@@ -19,15 +19,16 @@ import { User, Group, Habit, HabitStatus, HabitFrequency, ChatMessage, Notificat
 import { MOTIVATIONAL_QUOTES } from './constants';
 import { Icons } from './components/Icons';
 import { Button, Input, Card, Modal } from './components/UI';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 
 // --- MAIN APP ---
 
-const App: React.FC = () => {
+const AppContent: React.FC = () => {
   // --- STATE ---
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [currentView, setCurrentView] = useState<'auth' | 'dashboard' | 'personal' | 'group' | 'notifications'>('auth');
+  const { currentUser, logout } = useAuth();
+  const [currentView, setCurrentView] = useState<'auth' | 'dashboard' | 'personal' | 'group' | 'notifications'>('dashboard');
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
-  const [showDemoBanner, setShowDemoBanner] = useState(true);
+  const [showDemoBanner, setShowDemoBanner] = useState(false);
   
   // Data Store (Initialized from LocalStorage)
   const [users, setUsers] = useState<User[]>([]);
@@ -91,45 +92,18 @@ const App: React.FC = () => {
 
   // --- HANDLERS ---
   
-  const handleLogin = (identifier: string, type: 'email' | 'mobile') => {
-    // Reload DB to ensure we have latest data before logging in
-    const db = getStoredData();
-    let user = db.users.find(u => type === 'email' ? u.email === identifier : u.mobile === identifier);
-    
-    let newUsersList = db.users;
-
-    if (!user) {
-      // Create new user for demo if not exists
-      const newUser: User = {
-        id: `u${Date.now()}`,
-        name: identifier.split('@')[0] || 'New User',
-        email: type === 'email' ? identifier : undefined,
-        mobile: type === 'mobile' ? identifier : undefined,
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${Date.now()}`
-      };
-      newUsersList = [...db.users, newUser];
-      setUsers(newUsersList);
-      saveData({ users: newUsersList }); // Persist new user
-      user = newUser;
+  useEffect(() => {
+    if (currentUser) {
+        // Show Motivational Quote on first load
+        const randomQuote = MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)];
+        setWelcomeQuote(randomQuote);
+        setIsWelcomeModalOpen(true);
+        setCurrentView('dashboard');
     }
-    
-    // Refresh all state from DB just in case
-    setGroups(db.groups);
-    setHabits(db.habits);
-    setMessages(db.messages);
-    setNotifications(db.notifications);
+  }, [currentUser]);
 
-    setCurrentUser(user);
-    setCurrentView('dashboard');
-
-    // Show Motivational Quote
-    const randomQuote = MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)];
-    setWelcomeQuote(randomQuote);
-    setIsWelcomeModalOpen(true);
-  };
-
-  const handleLogout = () => {
-    setCurrentUser(null);
+  const handleLogout = async () => {
+    await logout();
     setCurrentView('auth');
     setActiveGroupId(null);
   };
@@ -418,8 +392,8 @@ const App: React.FC = () => {
 
   // --- VIEWS ---
 
-  if (currentView === 'auth') {
-    return <AuthScreen onLogin={handleLogin} />;
+  if (!currentUser) {
+    return <AuthScreen />;
   }
 
   // --- MAIN LAYOUT ---
@@ -789,27 +763,35 @@ const App: React.FC = () => {
   );
 };
 
+const App: React.FC = () => {
+    return (
+        <AuthProvider>
+            <AppContent />
+        </AuthProvider>
+    )
+}
+
 // --- SUB-VIEWS ---
 
-const AuthScreen: React.FC<{ onLogin: (id: string, type: 'email' | 'mobile') => void }> = ({ onLogin }) => {
-  const [method, setMethod] = useState<'mobile' | 'email'>('mobile');
-  const [input, setInput] = useState('');
-  const [error, setError] = useState('');
+const AuthScreen: React.FC = () => {
+  const { loginWithGoogle, loginWithEmail, error: authError } = useAuth();
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [localError, setLocalError] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (method === 'mobile') {
-        if (!input.startsWith('+91') || input.length !== 13) {
-            setError('Please enter a valid Indian mobile number starting with +91');
-            return;
-        }
-    } else {
-        if (!input.includes('@')) {
-            setError('Please enter a valid email');
-            return;
-        }
+    setLocalError('');
+    if (!email.includes('@') || password.length < 6) {
+        setLocalError('Invalid email or password (min 6 chars)');
+        return;
     }
-    onLogin(input, method);
+    try {
+        await loginWithEmail(email, password, isSignUp);
+    } catch (e) {
+        // Error handled in context
+    }
   };
 
   return (
@@ -824,40 +806,47 @@ const AuthScreen: React.FC<{ onLogin: (id: string, type: 'email' | 'mobile') => 
             <p className="text-gray-500 mt-2">Track together, grow together.</p>
           </div>
 
-          <div className="flex rounded-lg bg-gray-100 p-1 mb-6">
-            <button 
-                onClick={() => { setMethod('mobile'); setInput('+91'); setError(''); }}
-                className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${method === 'mobile' ? 'bg-white shadow text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}
-            >
-                Mobile
-            </button>
-            <button 
-                onClick={() => { setMethod('email'); setInput(''); setError(''); }}
-                className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${method === 'email' ? 'bg-white shadow text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}
-            >
-                Email
-            </button>
-          </div>
-
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                {method === 'mobile' ? 'Mobile Number' : 'Email Address'}
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
               <input 
-                type={method === 'mobile' ? 'tel' : 'email'}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder={method === 'mobile' ? '+91 98765 43210' : 'you@example.com'}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
               />
-              {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
             </div>
+             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="******"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+            </div>
+
+            {(localError || authError) && <p className="text-red-500 text-xs mt-1">{localError || authError}</p>}
+
             <Button type="submit" className="w-full py-3 text-lg">
-                Login / Sign Up
+                {isSignUp ? 'Sign Up' : 'Login'}
             </Button>
-            <p className="text-center text-xs text-gray-400 mt-4">
-                Note: Since this is a demo, your data is saved in your browser's local storage.
+
+            <div className="relative flex py-2 items-center">
+                <div className="flex-grow border-t border-gray-300"></div>
+                <span className="flex-shrink mx-4 text-gray-400 text-sm">Or</span>
+                <div className="flex-grow border-t border-gray-300"></div>
+            </div>
+
+            <Button type="button" variant="secondary" className="w-full py-3 flex items-center justify-center gap-2" onClick={() => loginWithGoogle()}>
+                <svg className="w-5 h-5" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+                Continue with Google
+            </Button>
+
+            <p className="text-center text-sm text-gray-600 mt-4 cursor-pointer hover:underline" onClick={() => setIsSignUp(!isSignUp)}>
+                {isSignUp ? 'Already have an account? Login' : "Don't have an account? Sign Up"}
             </p>
           </form>
         </div>
