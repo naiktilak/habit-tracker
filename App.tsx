@@ -34,6 +34,7 @@ const App: React.FC = () => {
     const [habits, setHabits] = useState<Habit[]>([]);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [notifications, setNotifications] = useState<Notification[]>([]);
+    const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [isWelcomeModalOpen, setIsWelcomeModalOpen] = useState(false);
     const [welcomeQuote, setWelcomeQuote] = useState('');
     const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -56,12 +57,45 @@ const App: React.FC = () => {
     >('dashboard');
 
     useEffect(() => {
+        if (!user) return;
+
         const db = getStoredData();
-        setUsers(db.users);
+
+        // SYNC USER LOGIC
+        let appUser = db.users.find(u => u.id === user.uid);
+        if (!appUser && user.email) {
+            appUser = db.users.find(u => u.email === user.email);
+        }
+
+        let updatedUsers = db.users;
+
+        if (!appUser) {
+             // Create new user if not found
+             appUser = {
+                 id: user.uid,
+                 name: user.displayName || "User",
+                 email: user.email || undefined,
+                 mobile: undefined,
+                 avatar: user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`,
+             };
+             updatedUsers = [...db.users, appUser];
+             saveData({ users: updatedUsers });
+        }
+
+        setUsers(updatedUsers);
         setGroups(db.groups);
         setHabits(db.habits);
         setMessages(db.messages);
         setNotifications(db.notifications);
+
+        setCurrentUser(appUser);
+        setCurrentView('dashboard');
+
+        // Show Motivational Quote
+        const randomQuote = MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)];
+        setWelcomeQuote(randomQuote);
+        setIsWelcomeModalOpen(true);
+
         // Optional: Listen for storage events to sync across tabs
         const handleStorageChange = () => {
             const updatedDb = getStoredData();
@@ -73,7 +107,7 @@ const App: React.FC = () => {
         };
         window.addEventListener('storage', handleStorageChange);
         return () => window.removeEventListener('storage', handleStorageChange);
-    }, []);
+    }, [user]);
 
     if (loading) {
         return <div className="p-6">Checking login...</div>;
@@ -83,15 +117,9 @@ const App: React.FC = () => {
         return <FirebaseLogin />;
     }
 
-    const currentUser: User = {
-        id: user.uid,
-        name: user.displayName || "User",
-        email: user.email || undefined,
-        mobile: undefined,
-        avatar:
-            user.photoURL ||
-            `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`,
-    };
+    if (!currentUser) {
+         return <div className="p-6 flex items-center justify-center h-screen"><Icons.Activity className="w-8 h-8 animate-spin text-indigo-600" /></div>;
+    }
 
 
 
