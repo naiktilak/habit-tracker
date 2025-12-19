@@ -46,6 +46,9 @@ const App: React.FC = () => {
     const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
     const [inviteEmail, setInviteEmail] = useState('');
     const [isManageGroupModalOpen, setIsManageGroupModalOpen] = useState(false);
+    const [aiInsight, setAiInsight] = useState<string | null>(null);
+    const [isAiLoading, setIsAiLoading] = useState(false);
+    const [selectedDate, setSelectedDate] = useState(new Date());
 
 
     const [currentView, setCurrentView] = useState<
@@ -59,6 +62,17 @@ const App: React.FC = () => {
         setHabits(db.habits);
         setMessages(db.messages);
         setNotifications(db.notifications);
+        // Optional: Listen for storage events to sync across tabs
+        const handleStorageChange = () => {
+            const updatedDb = getStoredData();
+            setUsers(updatedDb.users);
+            setGroups(updatedDb.groups);
+            setHabits(updatedDb.habits);
+            setMessages(updatedDb.messages);
+            setNotifications(updatedDb.notifications);
+        };
+        window.addEventListener('storage', handleStorageChange);
+        return () => window.removeEventListener('storage', handleStorageChange);
     }, []);
 
     if (loading) {
@@ -81,7 +95,7 @@ const App: React.FC = () => {
 
 
 
-        const handleLogout = async () => {
+    const handleLogout = async () => {
             await logout();
             setActiveGroupId(null);
         };
@@ -95,6 +109,7 @@ const App: React.FC = () => {
           const updatedUsers = users.map(u => u.id === currentUser.id ? updatedUser : u);
 
           setUsers(updatedUsers);
+          setCurrentUser(updatedUser);
           saveData({ users: updatedUsers });
           setIsProfileModalOpen(false);
       };
@@ -352,14 +367,15 @@ const App: React.FC = () => {
 
       const getAIAnalysis = async () => {
         if (!currentUser) return;
+          setIsAiLoading(true);
 
         const relevantHabits = activeGroupId
             ? habits.filter(h => h.groupId === activeGroupId && h.userId === currentUser.id)
             : habits.filter(h => h.userId === currentUser.id && !h.groupId);
 
         const insight = await generateHabitInsights(currentUser, relevantHabits, 'weekly');
-
-
+          setAiInsight(insight);
+          setIsAiLoading(false);
       };
 
       const toggleFriendSelection = (userId: string) => {
@@ -378,7 +394,7 @@ const App: React.FC = () => {
 
       return (
         <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row">
-
+            {/* Sidebar Navigation */}
           <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out md:translate-x-0 md:static ${showMobileMenu ? 'translate-x-0' : '-translate-x-full'}`}>
             <div className="h-full flex flex-col">
               <div className="p-6 flex items-center justify-between border-b border-gray-100">
@@ -460,9 +476,9 @@ const App: React.FC = () => {
             </div>
           </aside>
 
-
+            {/* Main Content Area */}
           <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
-
+              {/* Header */}
             <header className="bg-white border-b border-gray-200 p-4 flex justify-between items-center shrink-0">
               <div className="flex items-center gap-3">
                  <button onClick={() => setShowMobileMenu(true)} className="md:hidden text-gray-600">
@@ -488,7 +504,7 @@ const App: React.FC = () => {
               </div>
             </header>
 
-
+              {/* Scrollable Content */}
             <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8">
                 {currentView === 'dashboard' && (
                     <DashboardView
@@ -514,12 +530,15 @@ const App: React.FC = () => {
                         users={users}
                         groups={groups}
                         currentUser={currentUser!}
-
+                        selectedDate={selectedDate}
+                        setSelectedDate={setSelectedDate}
                         onToggleStatus={toggleHabitStatus}
                         onToggleCompletion={toggleHabitCompletion}
                         onAddHabit={addNewHabit}
                         onGetAI={getAIAnalysis}
-
+                        aiInsight={aiInsight}
+                        isAiLoading={isAiLoading}
+                        setAiInsight={setAiInsight}
                         messages={messages}
                         onSendMessage={sendMessage}
                         onOpenInvite={() => setIsInviteModalOpen(true)}
@@ -529,7 +548,7 @@ const App: React.FC = () => {
             </div>
           </main>
 
-
+            {/* Welcome Quote Modal */}
           <Modal isOpen={isWelcomeModalOpen} onClose={() => setIsWelcomeModalOpen(false)} title="Daily Inspiration">
             <div className="text-center py-6">
                 <div className="mb-4">
@@ -545,7 +564,7 @@ const App: React.FC = () => {
             </div>
           </Modal>
 
-
+            {/* Profile Modal */}
           <Modal isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} title="Edit Profile">
               <form onSubmit={handleUpdateProfile} className="space-y-4">
                   <div className="flex flex-col items-center mb-4">
@@ -575,7 +594,7 @@ const App: React.FC = () => {
               </form>
           </Modal>
 
-
+            {/* Create Group Modal */}
           <Modal isOpen={isCreateGroupModalOpen} onClose={() => setIsCreateGroupModalOpen(false)} title="Create New Group">
               <form onSubmit={handleCreateGroup} className="space-y-4">
                   <Input
@@ -588,7 +607,7 @@ const App: React.FC = () => {
 
                   <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Add Friends</label>
-
+                      {/* Email Invite Input */}
 
                       <div className="flex gap-2 mb-3">
                           <input
@@ -631,7 +650,7 @@ const App: React.FC = () => {
               </form>
           </Modal>
 
-
+            {/* Invite Member Modal */}
           <Modal isOpen={isInviteModalOpen} onClose={() => setIsInviteModalOpen(false)} title="Invite Member to Group">
               <form onSubmit={handleInviteMember} className="space-y-4">
                   <p className="text-sm text-gray-600">Enter the email address of the person you want to invite to <strong>{activeGroup?.name}</strong>. If they don't have an account, one will be created for them to log in later.</p>
@@ -650,7 +669,7 @@ const App: React.FC = () => {
               </form>
           </Modal>
 
-
+            {/* Manage Group Modal */}
           <Modal isOpen={isManageGroupModalOpen} onClose={() => setIsManageGroupModalOpen(false)} title={`Manage ${activeGroup?.name}`}>
               <div className="space-y-4">
                  <p className="text-sm text-gray-600 mb-2">Members of this group:</p>
