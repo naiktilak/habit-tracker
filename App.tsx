@@ -1,20 +1,28 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   BarChart, 
   Bar, 
   XAxis, 
-  YAxis, 
   CartesianGrid, 
   Tooltip, 
-  Legend, 
-  ResponsiveContainer,
-  LineChart,
-  Line
+  ResponsiveContainer
 } from 'recharts';
-import { format, startOfWeek, addDays, subWeeks, addWeeks, isSameDay, subMonths, isSameMonth, startOfMonth, endOfMonth, eachDayOfInterval, getISOWeek, differenceInCalendarDays, parseISO, subDays } from 'date-fns';
+import { format, startOfWeek, addDays, isSameDay, startOfMonth, endOfMonth, eachDayOfInterval, differenceInCalendarDays, parseISO, subDays, addWeeks } from 'date-fns';
 import ExcelJS from 'exceljs';
 import { generateHabitInsights } from './services/geminiService';
-import { getStoredData, saveData } from './services/storage';
+import {
+    db,
+    upsertUser,
+    createGroup,
+    updateGroup,
+    createHabit,
+    updateHabit,
+    deleteHabit,
+    createMessage,
+    createNotificationsBatch,
+    markNotificationsReadBatch
+} from './services/firebaseService';
+import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/firestore';
 import { User, Group, Habit, HabitStatus, HabitFrequency, ChatMessage, Notification } from './types';
 import { MOTIVATIONAL_QUOTES } from './constants';
 import { Icons } from './components/Icons';
@@ -28,13 +36,20 @@ const App: React.FC = () => {
     const { user, loading, logout } = useAuth();
     const [showMobileMenu, setShowMobileMenu] = useState(false);
     const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
-    const [showDemoBanner, setShowDemoBanner] = useState(true);
+    const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+    // Data State (Synced via Listeners)
     const [users, setUsers] = useState<User[]>([]);
     const [groups, setGroups] = useState<Group[]>([]);
-    const [habits, setHabits] = useState<Habit[]>([]);
-    const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const [habitsMap, setHabitsMap] = useState<Record<string, Habit>>({});
+    const [messagesMap, setMessagesMap] = useState<Record<string, ChatMessage>>({});
     const [notifications, setNotifications] = useState<Notification[]>([]);
-    const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+    // Derived State
+    const habits = useMemo(() => Object.values(habitsMap), [habitsMap]);
+    const messages = useMemo(() => Object.values(messagesMap).sort((a,b) => a.timestamp - b.timestamp), [messagesMap]);
+
+    // UI State
     const [isWelcomeModalOpen, setIsWelcomeModalOpen] = useState(false);
     const [welcomeQuote, setWelcomeQuote] = useState('');
     const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -51,110 +66,142 @@ const App: React.FC = () => {
     const [isAiLoading, setIsAiLoading] = useState(false);
     const [selectedDate, setSelectedDate] = useState(new Date());
 
-
     const [currentView, setCurrentView] = useState<
         'dashboard' | 'personal' | 'group' | 'notifications'
     >('dashboard');
 
+    // --- INITIAL SYNC & LISTENERS ---
+
     useEffect(() => {
         if (!user) return;
 
-        const db = getStoredData();
+        // 1. Sync Current User
+        const syncUser = async () => {
+            const userRef = doc(db, "users", user.uid);
+            const snap = await getDoc(userRef);
+            if (!snap.exists()) {
+                 const newUser: User = {
+                     id: user.uid,
+                     name: user.displayName || "User",
+                     email: user.email || undefined,
+                     avatar: user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`,
+                 };
+                 await upsertUser(newUser);
+            }
+        };
+        syncUser();
 
-        // SYNC USER LOGIC
-        let appUser = db.users.find(u => u.id === user.uid);
-        if (!appUser && user.email) {
-            appUser = db.users.find(u => u.email === user.email);
-        }
+        // 2. Listen to Users (All)
+        const unsubUsers = onSnapshot(query(collection(db, "users")), (snap) => {
+            const list = snap.docs.map(d => d.data() as User);
+            setUsers(list);
+            const me = list.find(u => u.id === user.uid);
+            if (me) setCurrentUser(me);
+        });
 
-        let updatedUsers = db.users;
+        // 3. Listen to Groups (My Groups)
+        const unsubGroups = onSnapshot(query(collection(db, "groups"), where("members", "array-contains", user.uid)), (snap) => {
+            setGroups(snap.docs.map(d => d.data() as Group));
+        });
 
-        if (!appUser) {
-             // Create new user if not found
-             appUser = {
-                 id: user.uid,
-                 name: user.displayName || "User",
-                 email: user.email || undefined,
-                 mobile: undefined,
-                 avatar: user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`,
-             };
-             updatedUsers = [...db.users, appUser];
-             saveData({ users: updatedUsers });
-        }
+        // 4. Listen to Notifications
+        const unsubNotifs = onSnapshot(query(collection(db, "notifications"), where("userId", "in", [user.uid, 'ALL'])), (snap) => {
+             setNotifications(snap.docs.map(d => d.data() as Notification));
+        });
 
-        setUsers(updatedUsers);
-        setGroups(db.groups);
-        setHabits(db.habits);
-        setMessages(db.messages);
-        setNotifications(db.notifications);
-
-        setCurrentUser(appUser);
-        setCurrentView('dashboard');
-
-        // Show Motivational Quote
-        const randomQuote = MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)];
-        setWelcomeQuote(randomQuote);
+        // Show Quote on load
+        setWelcomeQuote(MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)]);
         setIsWelcomeModalOpen(true);
 
-        // Optional: Listen for storage events to sync across tabs
-        const handleStorageChange = () => {
-            const updatedDb = getStoredData();
-            setUsers(updatedDb.users);
-            setGroups(updatedDb.groups);
-            setHabits(updatedDb.habits);
-            setMessages(updatedDb.messages);
-            setNotifications(updatedDb.notifications);
+        return () => {
+            unsubUsers();
+            unsubGroups();
+            unsubNotifs();
         };
-        window.addEventListener('storage', handleStorageChange);
-        return () => window.removeEventListener('storage', handleStorageChange);
     }, [user]);
 
-    if (loading) {
-        return <div className="p-6">Checking login...</div>;
-    }
+    // --- SECONDARY LISTENERS (Habits & Messages) ---
+    // Dependent on Groups to know which group data to fetch
+    useEffect(() => {
+        if (!user) return;
 
-    if (!user) {
-        return <FirebaseLogin />;
-    }
+        // Reset maps when user changes, but we want to merge group updates.
+        // Actually, we should probably clear when groups change drastically, but let's just keep adding/updating.
+        // To be safe, we can rebuild listeners.
 
-    if (!currentUser) {
-         return <div className="p-6 flex items-center justify-center h-screen"><Icons.Activity className="w-8 h-8 animate-spin text-indigo-600" /></div>;
-    }
+        const myId = user.uid;
+        const groupIds = groups.map(g => g.id);
+
+        // Listener A: My Personal Habits & My Contributions
+        const unsubMyHabits = onSnapshot(query(collection(db, "habits"), where("userId", "==", myId)), (snap) => {
+            const updates: Record<string, Habit> = {};
+            snap.docs.forEach(d => { updates[d.id] = d.data() as Habit; });
+            setHabitsMap(prev => ({ ...prev, ...updates }));
+        });
+
+        // Listener B: Habits of my Groups (limit 10 for 'in' clause)
+        // We only listen if we have groups.
+        let unsubGroupHabits = () => {};
+        let unsubGroupMessages = () => {};
+
+        if (groupIds.length > 0) {
+            // Slicing to first 10 for demo stability with Firebase 'in' limit
+            const slicedGroups = groupIds.slice(0, 10);
+
+            unsubGroupHabits = onSnapshot(query(collection(db, "habits"), where("groupId", "in", slicedGroups)), (snap) => {
+                 const updates: Record<string, Habit> = {};
+                 snap.docs.forEach(d => { updates[d.id] = d.data() as Habit; });
+                 setHabitsMap(prev => ({ ...prev, ...updates }));
+            });
+
+            unsubGroupMessages = onSnapshot(query(collection(db, "messages"), where("groupId", "in", slicedGroups)), (snap) => {
+                 const updates: Record<string, ChatMessage> = {};
+                 snap.docs.forEach(d => { updates[d.id] = d.data() as ChatMessage; });
+                 setMessagesMap(prev => ({ ...prev, ...updates }));
+            });
+        }
+
+        return () => {
+            unsubMyHabits();
+            unsubGroupHabits();
+            unsubGroupMessages();
+        }
+    }, [user, groups]); // Re-run when groups list changes to update subscriptions
 
 
+    if (loading) return <div className="p-6">Checking login...</div>;
+    if (!user) return <FirebaseLogin />;
+    if (!currentUser) return <div className="p-6 flex items-center justify-center h-screen"><Icons.Activity className="w-8 h-8 animate-spin text-indigo-600" /></div>;
+
+    // --- ACTIONS ---
 
     const handleLogout = async () => {
-            await logout();
-            setActiveGroupId(null);
-        };
+        await logout();
+        setActiveGroupId(null);
+        setHabitsMap({});
+        setMessagesMap({});
+    };
 
-
-        const handleUpdateProfile = (e: React.FormEvent) => {
+    const handleUpdateProfile = async (e: React.FormEvent) => {
           e.preventDefault();
           if (!currentUser) return;
-
           const updatedUser = { ...currentUser, name: editProfileName, avatar: editProfileAvatar };
-          const updatedUsers = users.map(u => u.id === currentUser.id ? updatedUser : u);
-
-          setUsers(updatedUsers);
-          setCurrentUser(updatedUser);
-          saveData({ users: updatedUsers });
+          await upsertUser(updatedUser);
           setIsProfileModalOpen(false);
-      };
+    };
 
-      const openProfileModal = () => {
+    const openProfileModal = () => {
           if (!currentUser) return;
           setEditProfileName(currentUser.name);
           setEditProfileAvatar(currentUser.avatar);
           setIsProfileModalOpen(true);
-      };
+    };
 
-      const randomizeAvatar = () => {
+    const randomizeAvatar = () => {
           setEditProfileAvatar(`https://api.dicebear.com/7.x/avataaars/svg?seed=${Math.random()}`);
-      };
+    };
 
-      const ensureUserByEmail = (email: string): User => {
-          // Check if user exists, if not create them
+    const ensureUserByEmail = async (email: string): Promise<User> => {
           const existingUser = users.find(u => u.email === email);
           if (existingUser) return existingUser;
 
@@ -164,81 +211,62 @@ const App: React.FC = () => {
               email: email,
               avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`
           };
-          const updatedUsers = [...users, newUser];
-          setUsers(updatedUsers);
-          saveData({ users: updatedUsers });
+          await upsertUser(newUser);
           return newUser;
-      };
+    };
 
-      const toggleHabitStatus = (habitId: string, dateStr: string) => {
+    const toggleHabitStatus = async (habitId: string, dateStr: string) => {
         if (!currentUser) return;
 
         const habitToUpdate = habits.find(h => h.id === habitId);
-        if (habitToUpdate?.completed) return; // Cannot edit logs of completed habits
+        if (!habitToUpdate || habitToUpdate.completed) return;
 
-        const updatedHabits = habits.map(h => {
-          if (h.id !== habitId) return h;
+        const currentStatus = habitToUpdate.logs[dateStr]?.status;
+        let newStatus = HabitStatus.DONE;
+        if (currentStatus === HabitStatus.DONE) newStatus = HabitStatus.NOT_DONE;
+        else if (currentStatus === HabitStatus.NOT_DONE) newStatus = HabitStatus.PENDING;
 
-          const currentStatus = h.logs[dateStr]?.status;
-          let newStatus = HabitStatus.DONE;
-          if (currentStatus === HabitStatus.DONE) newStatus = HabitStatus.NOT_DONE;
-          else if (currentStatus === HabitStatus.NOT_DONE) newStatus = HabitStatus.PENDING; // remove log
+        const newLogs = { ...habitToUpdate.logs };
 
-          const newLogs = { ...h.logs };
-
-          if (newStatus === HabitStatus.PENDING) {
+        if (newStatus === HabitStatus.PENDING) {
             delete newLogs[dateStr];
-          } else {
+        } else {
             newLogs[dateStr] = {
               date: dateStr,
               status: newStatus,
               timestamp: Date.now()
             };
-          }
-          return { ...h, logs: newLogs };
-        });
+        }
 
-        setHabits(updatedHabits);
+        // 1. Update Habit
+        await updateHabit(habitId, { logs: newLogs });
 
-        // Prepare notifications
-        let updatedNotifications = [...notifications];
-        const changedHabit = updatedHabits.find(h => h.id === habitId);
-
-        // If marked DONE and it's a group habit, notify others
-        if (changedHabit?.logs[dateStr]?.status === HabitStatus.DONE && changedHabit.groupId) {
-            const group = groups.find(g => g.id === changedHabit.groupId);
+        // 2. Send Notifications (if applicable)
+        if (newStatus === HabitStatus.DONE && habitToUpdate.groupId) {
+            const group = groups.find(g => g.id === habitToUpdate.groupId);
             if (group) {
-                // Notify all members except self
                 const membersToNotify = group.members.filter(mId => mId !== currentUser.id);
                 const newNotifs = membersToNotify.map(mId => ({
                     id: `n${Date.now()}-${mId}`,
                     userId: mId,
-                    message: `${currentUser.name} completed "${changedHabit.title}" in ${group.name}!`,
+                    message: `${currentUser.name} completed "${habitToUpdate.title}" in ${group.name}!`,
                     read: false,
                     timestamp: Date.now(),
                     type: 'success' as const
                 }));
-                updatedNotifications = [...newNotifs, ...updatedNotifications];
-                setNotifications(updatedNotifications);
+                await createNotificationsBatch(newNotifs);
             }
         }
+    };
 
-        // Persist ALL changes
-        saveData({ habits: updatedHabits, notifications: updatedNotifications });
-      };
+    const toggleHabitCompletion = async (habitId: string) => {
+        const habit = habits.find(h => h.id === habitId);
+        if (habit) {
+            await updateHabit(habitId, { completed: !habit.completed });
+        }
+    };
 
-      const toggleHabitCompletion = (habitId: string) => {
-          const updatedHabits = habits.map(h => {
-              if (h.id === habitId) {
-                  return { ...h, completed: !h.completed };
-              }
-              return h;
-          });
-          setHabits(updatedHabits);
-          saveData({ habits: updatedHabits });
-      };
-
-      const addNewHabit = (habitData: Partial<Habit>) => {
+    const addNewHabit = async (habitData: Partial<Habit>) => {
         if (!currentUser) return;
         const newHabit: Habit = {
             id: `h${Date.now()}`,
@@ -253,12 +281,10 @@ const App: React.FC = () => {
             completed: false,
             createdAt: Date.now()
         };
-        const updatedHabits = [...habits, newHabit];
-        setHabits(updatedHabits);
-        saveData({ habits: updatedHabits });
-      };
+        await createHabit(newHabit);
+    };
 
-      const sendMessage = (text: string) => {
+    const sendMessage = async (text: string) => {
         if (!currentUser || !activeGroupId) return;
         const newMsg: ChatMessage = {
           id: `m${Date.now()}`,
@@ -267,12 +293,10 @@ const App: React.FC = () => {
           text,
           timestamp: Date.now()
         };
-        const updatedMessages = [...messages, newMsg];
-        setMessages(updatedMessages);
-        saveData({ messages: updatedMessages });
-      };
+        await createMessage(newMsg);
+    };
 
-      const handleCreateGroup = (e: React.FormEvent) => {
+    const handleCreateGroup = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!currentUser || !newGroupName.trim()) return;
 
@@ -280,13 +304,11 @@ const App: React.FC = () => {
           id: `g${Date.now()}`,
           name: newGroupName,
           members: [currentUser.id, ...selectedFriendIds],
-          admins: [currentUser.id], // Creator is admin
+          admins: [currentUser.id],
           inviteCode: Math.random().toString(36).substring(2, 8).toUpperCase()
         };
 
-        const updatedGroups = [...groups, newGroup];
-        setGroups(updatedGroups);
-        saveData({ groups: updatedGroups });
+        await createGroup(newGroup);
 
         setIsCreateGroupModalOpen(false);
         setNewGroupName('');
@@ -295,105 +317,79 @@ const App: React.FC = () => {
         setActiveGroupId(newGroup.id);
         setCurrentView('group');
         setShowMobileMenu(false);
-      };
+    };
 
-      const handleAddEmailToCreateGroup = () => {
+    const handleAddEmailToCreateGroup = async () => {
           if (!createGroupEmailInput.trim() || !createGroupEmailInput.includes('@')) return;
-          const user = ensureUserByEmail(createGroupEmailInput.trim());
+          const user = await ensureUserByEmail(createGroupEmailInput.trim());
           if (!selectedFriendIds.includes(user.id)) {
               setSelectedFriendIds([...selectedFriendIds, user.id]);
           }
           setCreateGroupEmailInput('');
-      };
+    };
 
-      const handleInviteMember = (e: React.FormEvent) => {
+    const handleInviteMember = async (e: React.FormEvent) => {
           e.preventDefault();
           if (!activeGroupId || !inviteEmail.trim() || !inviteEmail.includes('@')) return;
 
-          const user = ensureUserByEmail(inviteEmail.trim());
+          const user = await ensureUserByEmail(inviteEmail.trim());
+          const group = groups.find(g => g.id === activeGroupId);
+          if (group && !group.members.includes(user.id)) {
+               await updateGroup(activeGroupId, { members: [...group.members, user.id] });
+               setIsInviteModalOpen(false);
+               setInviteEmail('');
+               alert(`${user.name} added to the group!`);
+          }
+    };
 
-          const updatedGroups = groups.map(g => {
-              if (g.id === activeGroupId) {
-                  if (g.members.includes(user.id)) return g;
-                  return { ...g, members: [...g.members, user.id] };
-              }
-              return g;
-          });
-
-          setGroups(updatedGroups);
-          saveData({ groups: updatedGroups });
-          setIsInviteModalOpen(false);
-          setInviteEmail('');
-          alert(`${user.name} added to the group! They can now login with ${user.email} to see the group.`);
-      };
-
-      const handlePromoteAdmin = (userId: string) => {
+    const handlePromoteAdmin = async (userId: string) => {
         if (!activeGroupId) return;
-        const updatedGroups = groups.map(g => {
-            if (g.id === activeGroupId) {
-                if (g.admins && !g.admins.includes(userId)) {
-                    return { ...g, admins: [...(g.admins || []), userId] };
-                }
-            }
-            return g;
-        });
-        setGroups(updatedGroups);
-        saveData({ groups: updatedGroups });
-      };
-
-      const handleDemoteAdmin = (userId: string) => {
-        if (!activeGroupId) return;
-        const updatedGroups = groups.map(g => {
-            if (g.id === activeGroupId) {
-                if (g.admins && g.admins.includes(userId)) {
-                    // Ensure at least one admin remains
-                    if (g.admins.length > 1) {
-                       return { ...g, admins: g.admins.filter(id => id !== userId) };
-                    } else {
-                       alert("Group must have at least one admin. Promote someone else first.");
-                    }
-                }
-            }
-            return g;
-        });
-        setGroups(updatedGroups);
-        saveData({ groups: updatedGroups });
-      };
-
-      const handleRemoveMember = (userId: string) => {
-        if (!activeGroupId || !window.confirm("Are you sure you want to remove this member?")) return;
-
-        // Check if member is the last admin
         const group = groups.find(g => g.id === activeGroupId);
+        if (group && (!group.admins || !group.admins.includes(userId))) {
+            await updateGroup(activeGroupId, { admins: [...(group.admins || []), userId] });
+        }
+    };
+
+    const handleDemoteAdmin = async (userId: string) => {
+        if (!activeGroupId) return;
+        const group = groups.find(g => g.id === activeGroupId);
+        if (group && group.admins && group.admins.includes(userId)) {
+             if (group.admins.length > 1) {
+                await updateGroup(activeGroupId, { admins: group.admins.filter(id => id !== userId) });
+             } else {
+                alert("Group must have at least one admin.");
+             }
+        }
+    };
+
+    const handleRemoveMember = async (userId: string) => {
+        if (!activeGroupId || !window.confirm("Are you sure you want to remove this member?")) return;
+        const group = groups.find(g => g.id === activeGroupId);
+
         if (group?.admins.includes(userId) && group.admins.length === 1) {
-            alert("Cannot remove the only admin of the group. Promote someone else first.");
+            alert("Cannot remove the only admin. Promote someone else first.");
             return;
         }
 
-        const updatedGroups = groups.map(g => {
-            if (g.id === activeGroupId) {
-                return {
-                    ...g,
-                    members: g.members.filter(m => m !== userId),
-                    admins: (g.admins || []).filter(a => a !== userId)
-                };
-            }
-            return g;
-        });
-        setGroups(updatedGroups);
-        saveData({ groups: updatedGroups });
-      };
+        if (group) {
+             await updateGroup(activeGroupId, {
+                 members: group.members.filter(m => m !== userId),
+                 admins: (group.admins || []).filter(a => a !== userId)
+             });
+        }
+    };
 
-      const markNotificationsRead = () => {
+    const markNotificationsRead = async () => {
         if (!currentUser) return;
-        const updatedNotifications = notifications.map(n =>
-            n.userId === currentUser.id ? { ...n, read: true } : n
-        );
-        setNotifications(updatedNotifications);
-        saveData({ notifications: updatedNotifications });
-      };
+        const unreadIds = notifications.filter(n => n.userId === currentUser.id && !n.read).map(n => n.id);
+        if (unreadIds.length > 0) {
+            await markNotificationsReadBatch(currentUser.id, unreadIds);
+        }
+    };
 
-      const getAIAnalysis = async () => {
+    // --- VIEW LOGIC REMAINS MOSTLY UNCHANGED ---
+
+    const getAIAnalysis = async () => {
         if (!currentUser) return;
           setIsAiLoading(true);
 
@@ -412,17 +408,11 @@ const App: React.FC = () => {
         );
       };
 
-      // --- VIEWS ---
-
-
-      // --- MAIN LAYOUT ---
-
       const activeGroup = groups.find(g => g.id === activeGroupId);
       const unreadCount = notifications.filter(n => n.userId === currentUser?.id && !n.read).length;
 
       return (
         <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row">
-            {/* Sidebar Navigation */}
           <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out md:translate-x-0 md:static ${showMobileMenu ? 'translate-x-0' : '-translate-x-full'}`}>
             <div className="h-full flex flex-col">
               <div className="p-6 flex items-center justify-between border-b border-gray-100">
@@ -504,9 +494,7 @@ const App: React.FC = () => {
             </div>
           </aside>
 
-            {/* Main Content Area */}
           <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
-              {/* Header */}
             <header className="bg-white border-b border-gray-200 p-4 flex justify-between items-center shrink-0">
               <div className="flex items-center gap-3">
                  <button onClick={() => setShowMobileMenu(true)} className="md:hidden text-gray-600">
@@ -532,7 +520,6 @@ const App: React.FC = () => {
               </div>
             </header>
 
-              {/* Scrollable Content */}
             <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8">
                 {currentView === 'dashboard' && (
                     <DashboardView
@@ -554,7 +541,7 @@ const App: React.FC = () => {
                         isGroup={currentView === 'group'}
                         activeGroupId={activeGroupId}
                         habits={habits}
-                        setHabits={setHabits} // Pass setter for adding habits
+                        setHabits={() => {}} // Removed direct setter, handled via Add Habit
                         users={users}
                         groups={groups}
                         currentUser={currentUser!}
@@ -576,7 +563,6 @@ const App: React.FC = () => {
             </div>
           </main>
 
-            {/* Welcome Quote Modal */}
           <Modal isOpen={isWelcomeModalOpen} onClose={() => setIsWelcomeModalOpen(false)} title="Daily Inspiration">
             <div className="text-center py-6">
                 <div className="mb-4">
@@ -592,7 +578,6 @@ const App: React.FC = () => {
             </div>
           </Modal>
 
-            {/* Profile Modal */}
           <Modal isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} title="Edit Profile">
               <form onSubmit={handleUpdateProfile} className="space-y-4">
                   <div className="flex flex-col items-center mb-4">
@@ -622,7 +607,6 @@ const App: React.FC = () => {
               </form>
           </Modal>
 
-            {/* Create Group Modal */}
           <Modal isOpen={isCreateGroupModalOpen} onClose={() => setIsCreateGroupModalOpen(false)} title="Create New Group">
               <form onSubmit={handleCreateGroup} className="space-y-4">
                   <Input
@@ -635,8 +619,6 @@ const App: React.FC = () => {
 
                   <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Add Friends</label>
-                      {/* Email Invite Input */}
-
                       <div className="flex gap-2 mb-3">
                           <input
                             type="email"
@@ -678,7 +660,6 @@ const App: React.FC = () => {
               </form>
           </Modal>
 
-            {/* Invite Member Modal */}
           <Modal isOpen={isInviteModalOpen} onClose={() => setIsInviteModalOpen(false)} title="Invite Member to Group">
               <form onSubmit={handleInviteMember} className="space-y-4">
                   <p className="text-sm text-gray-600">Enter the email address of the person you want to invite to <strong>{activeGroup?.name}</strong>. If they don't have an account, one will be created for them to log in later.</p>
@@ -697,7 +678,6 @@ const App: React.FC = () => {
               </form>
           </Modal>
 
-            {/* Manage Group Modal */}
           <Modal isOpen={isManageGroupModalOpen} onClose={() => setIsManageGroupModalOpen(false)} title={`Manage ${activeGroup?.name}`}>
               <div className="space-y-4">
                  <p className="text-sm text-gray-600 mb-2">Members of this group:</p>
@@ -769,87 +749,7 @@ const App: React.FC = () => {
       );
     };
 
-
-
-// --- SUB-VIEWS ---
-
-const AuthScreen: React.FC<{ onLogin: (id: string, type: 'email' | 'mobile') => void }> = ({ onLogin }) => {
-  const [method, setMethod] = useState<'mobile' | 'email'>('mobile');
-  const [input, setInput] = useState('');
-  const [error, setError] = useState('');
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (method === 'mobile') {
-        if (!input.startsWith('+91') || input.length !== 13) {
-            setError('Please enter a valid Indian mobile number starting with +91');
-            return;
-        }
-    } else {
-        if (!input.includes('@')) {
-            setError('Please enter a valid email');
-            return;
-        }
-    }
-    onLogin(input, method);
-  };
-
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl overflow-hidden">
-        <div className="p-8">
-          <div className="text-center mb-8">
-            <div className="bg-indigo-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Icons.Activity className="w-8 h-8 text-indigo-600" />
-            </div>
-            <h1 className="text-2xl font-bold text-gray-900">Welcome to HabitSync</h1>
-            <p className="text-gray-500 mt-2">Track together, grow together.</p>
-          </div>
-
-          <div className="flex rounded-lg bg-gray-100 p-1 mb-6">
-            <button
-                onClick={() => { setMethod('mobile'); setInput('+91'); setError(''); }}
-                className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${method === 'mobile' ? 'bg-white shadow text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}
-            >
-                Mobile
-            </button>
-            <button
-                onClick={() => { setMethod('email'); setInput(''); setError(''); }}
-                className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${method === 'email' ? 'bg-white shadow text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}
-            >
-                Email
-            </button>
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                {method === 'mobile' ? 'Mobile Number' : 'Email Address'}
-              </label>
-              <input
-                type={method === 'mobile' ? 'tel' : 'email'}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder={method === 'mobile' ? '+91 98765 43210' : 'you@example.com'}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
-              />
-              {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
-            </div>
-            <Button type="submit" className="w-full py-3 text-lg">
-                Login / Sign Up
-            </Button>
-            <p className="text-center text-xs text-gray-400 mt-4">
-                Note: Since this is a demo, your data is saved in your browser's local storage.
-            </p>
-          </form>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], notifications: Notification[] }> = ({ user, habits, groups, notifications }) => {
-    // ... existing dashboard code ...
     // Calculate global stats
     const totalLogs = habits.filter(h => h.userId === user.id).reduce((acc, h) => acc + Object.keys(h.logs).length, 0);
     const completedLogs = habits.filter(h => h.userId === user.id).reduce((acc, h) => acc + Object.values(h.logs).filter(l => l.status === HabitStatus.DONE).length, 0);
@@ -912,7 +812,6 @@ const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], no
 };
 
 const NotificationsView: React.FC<{ notifications: Notification[], user: User }> = ({ notifications, user }) => {
-    // ... existing ...
     const myNotifications = notifications.filter(n => n.userId === user.id || n.userId === 'ALL').sort((a,b) => b.timestamp - a.timestamp);
 
     return (
@@ -971,81 +870,64 @@ const HabitTrackerView: React.FC<{
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
     const [viewMode, setViewMode] = useState<'weekly' | 'monthly'>('weekly');
-    const [hideCompleted, setHideCompleted] = useState(true); // Default to hiding archived
+    const [hideCompleted, setHideCompleted] = useState(true);
 
     const [newHabitTitle, setNewHabitTitle] = useState('');
     const [newHabitFreq, setNewHabitFreq] = useState(HabitFrequency.DAILY);
     const [newHabitDuration, setNewHabitDuration] = useState('');
-    const [newHabitTarget, setNewHabitTarget] = useState('1'); // Days per week
-    const [newHabitInterval, setNewHabitInterval] = useState('2'); // Every X days
+    const [newHabitTarget, setNewHabitTarget] = useState('1');
+    const [newHabitInterval, setNewHabitInterval] = useState('2');
 
     const [chatOpen, setChatOpen] = useState(false);
     const [chatInput, setChatInput] = useState('');
 
-    // Filter Logic
     const relevantHabits = isGroup
         ? habits.filter(h => h.groupId === activeGroupId)
         : habits.filter(h => h.userId === currentUser.id && !h.groupId);
 
-    // Group Logic
     const currentGroupObj = groups.find(g => g.id === activeGroupId);
     const activeMembers = isGroup && currentGroupObj
         ? currentGroupObj.members.map(mid => users.find(u => u.id === mid)).filter(u => u !== undefined) as User[]
         : [currentUser];
 
-    // Admin Logic
     const isCurrentGroupAdmin = isGroup && currentGroupObj && (currentGroupObj.admins || []).includes(currentUser.id);
 
-    // Date Logic
     const weekStart = startOfWeek(selectedDate, { weekStartsOn: 1 });
     const weekDays = Array.from({ length: 7 }).map((_, i) => addDays(weekStart, i));
 
-    // Monthly Logic
     const monthStart = startOfMonth(selectedDate);
     const monthEnd = endOfMonth(selectedDate);
     const monthDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
 
-    // Helper: Calculate Streak (Current consecutive days)
     const calculateStreak = (habit: Habit): number => {
         let streak = 0;
         const today = new Date();
-
-        // Check if today is done (streak includes today if done)
         const todayStr = format(today, 'yyyy-MM-dd');
         const isTodayDone = habit.logs[todayStr]?.status === HabitStatus.DONE;
-
         if (isTodayDone) streak++;
 
-        // Iterate backwards from yesterday
         let current = subDays(today, 1);
         while (true) {
             const dStr = format(current, 'yyyy-MM-dd');
             const status = habit.logs[dStr]?.status;
-
-            // Only count explicit DONE statuses
             if (status === HabitStatus.DONE) {
                 streak++;
                 current = subDays(current, 1);
             } else {
-                // Break on missed or pending days (strict streak)
                 break;
             }
         }
         return streak;
     };
 
-    // --- CHART DATA GENERATION ---
     const chartData = useMemo(() => {
         const data = [];
         const daysToMap = viewMode === 'weekly' ? weekDays : monthDays;
 
         for (const day of daysToMap) {
             const dStr = format(day, 'yyyy-MM-dd');
-            // Personal progress calculation
             const myHabits = relevantHabits.filter(h => h.userId === currentUser.id);
             const total = myHabits.length;
-
-            // Logic for "Completed":
             const completed = myHabits.filter(h => h.logs[dStr]?.status === HabitStatus.DONE).length;
 
             data.push({
@@ -1057,13 +939,11 @@ const HabitTrackerView: React.FC<{
         return data;
     }, [relevantHabits, currentUser.id, weekDays, monthDays, viewMode]);
 
-    // --- EXPORT LOGIC ---
     const handleExportExcel = async () => {
         const workbook = new ExcelJS.Workbook();
         workbook.creator = 'HabitSync';
         workbook.created = new Date();
 
-        // --- SHEET 1: SUMMARY ---
         const summarySheet = workbook.addWorksheet('Summary');
         summarySheet.columns = [
             { header: 'Member Name', key: 'name', width: 25 },
@@ -1071,14 +951,12 @@ const HabitTrackerView: React.FC<{
             { header: 'Rank', key: 'rank', width: 10 }
         ];
 
-        // Styling Header
         const summaryHeader = summarySheet.getRow(1);
         summaryHeader.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 12 };
-        summaryHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } }; // Indigo-600
+        summaryHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
         summaryHeader.alignment = { horizontal: 'center', vertical: 'middle' };
         summaryHeader.height = 25;
 
-        // Add Data
         const summaryData = activeMembers.map(m => ({
             name: m.name,
             score: getGroupStats(m.id)
@@ -1086,15 +964,11 @@ const HabitTrackerView: React.FC<{
 
         summaryData.forEach((d, index) => {
             const row = summarySheet.addRow({ ...d, rank: index + 1 });
-
-            // Zebra Striping for Summary
             if ((index + 1) % 2 === 0) {
                  row.eachCell(cell => {
-                     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9FAFB' } }; // Light gray
+                     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9FAFB' } };
                  });
             }
-
-            // Borders
             row.eachCell(cell => {
                 cell.border = {
                     top: { style: 'thin', color: { argb: 'FFE5E7EB' } },
@@ -1104,51 +978,42 @@ const HabitTrackerView: React.FC<{
                 };
                 cell.alignment = { horizontal: 'center' };
             });
-            // Left align name
             row.getCell(1).alignment = { horizontal: 'left' };
         });
 
-        // --- SHEET 2: DETAILED LOG ---
         const detailSheet = workbook.addWorksheet('Detailed Log');
         const daysToMap = viewMode === 'weekly' ? weekDays : monthDays;
 
-        // Define columns width
         detailSheet.columns = [
              { key: 'member', width: 20 },
              { key: 'habit', width: 25 },
              { key: 'freq', width: 25 },
-             ...daysToMap.map(() => ({ width: 14 })), // increased width slightly
+             ...daysToMap.map(() => ({ width: 14 })),
              { key: 'total', width: 10 }
         ];
 
         const headerValues = ['Member', 'Habit', 'Frequency Details', ...daysToMap.map(d => format(d, 'EEE, MMM dd')), 'Total'];
-
         let currentRow = 1;
 
         for (const member of activeMembers) {
              const memberHabits = relevantHabits.filter(h => h.userId === member.id);
-
-             // Spacing from previous block
              if (currentRow > 1) currentRow++;
 
-             // 1. User Header Row (Merged block for distinction)
              const userRow = detailSheet.getRow(currentRow);
              detailSheet.mergeCells(currentRow, 1, currentRow, headerValues.length);
              userRow.getCell(1).value = `User: ${member.name.toUpperCase()} (${member.email || member.mobile})`;
              userRow.getCell(1).font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
-             userRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } }; // Indigo-600 background
+             userRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
              userRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
              userRow.height = 25;
              currentRow++;
 
-             // 2. Column Header Row (Repeating columns as requested)
              const headerRow = detailSheet.getRow(currentRow);
              headerRow.values = headerValues;
-             headerRow.font = { bold: true, color: { argb: 'FF374151' } }; // Gray-700
-             headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } }; // Gray-200
+             headerRow.font = { bold: true, color: { argb: 'FF374151' } };
+             headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } };
              headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
              headerRow.height = 30;
-             // Apply borders to header
              headerRow.eachCell(cell => {
                 cell.border = {
                     top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
@@ -1170,7 +1035,6 @@ const HabitTrackerView: React.FC<{
                  continue;
              }
 
-             // 3. Data Rows
              let localIndex = 0;
              memberHabits.forEach(habit => {
                 let freqLabel = habit.frequency.toString();
@@ -1198,39 +1062,29 @@ const HabitTrackerView: React.FC<{
 
                 const row = detailSheet.getRow(currentRow);
                 row.values = rowData;
-
-                // Styling
-                const rowBg = localIndex % 2 === 0 ? 'FFFFFFFF' : 'FFF9FAFB'; // Alternating White / Gray-50
+                const rowBg = localIndex % 2 === 0 ? 'FFFFFFFF' : 'FFF9FAFB';
 
                 row.eachCell((cell, colNum) => {
-                     // Borders
                     cell.border = {
                         top: { style: 'thin', color: { argb: 'FFE5E7EB' } },
                         left: { style: 'thin', color: { argb: 'FFE5E7EB' } },
                         bottom: { style: 'thin', color: { argb: 'FFE5E7EB' } },
                         right: { style: 'thin', color: { argb: 'FFE5E7EB' } }
                     };
-
-                    // Default Background
                     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowBg } };
-
-                    // Alignment
                     if (colNum <= 3) cell.alignment = { horizontal: 'left', vertical: 'middle' };
                     else cell.alignment = { horizontal: 'center', vertical: 'middle' };
 
-                    // Status Colors (Date columns are index 4 to 4+length-1)
                     if (colNum > 3 && colNum <= 3 + daysToMap.length) {
                          const status = logStatuses[colNum - 4];
                          if (status === HabitStatus.DONE) {
-                            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } }; // Green
+                            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
                             cell.font = { color: { argb: 'FF166534' }, bold: true };
                          } else if (status === HabitStatus.NOT_DONE) {
-                            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } }; // Red
+                            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
                             cell.font = { color: { argb: 'FF991B1B' }, bold: true };
                          }
                     }
-
-                    // Total Column Bold
                     if (colNum === headerValues.length) {
                         cell.font = { bold: true };
                     }
@@ -1241,7 +1095,6 @@ const HabitTrackerView: React.FC<{
              });
         }
 
-        // Write and Download
         const buffer = await workbook.xlsx.writeBuffer();
         const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
         const url = URL.createObjectURL(blob);
@@ -1252,20 +1105,14 @@ const HabitTrackerView: React.FC<{
         URL.revokeObjectURL(url);
     };
 
-    // --- HELPER: CHECK IF ENABLED ---
     const isHabitActionable = (habit: Habit, date: Date) => {
         const dateStr = format(date, 'yyyy-MM-dd');
-
-        // 1. Basic Future Check
         if (date > new Date()) return { enabled: false, reason: 'Future' };
 
-        // 2. Frequency Checks
         if (habit.frequency === HabitFrequency.WEEKLY) {
             const target = habit.targetDaysPerWeek || 1;
             const startOfHabitWeek = startOfWeek(date, { weekStartsOn: 1 });
             const endOfHabitWeek = addDays(startOfHabitWeek, 6);
-
-            // Count logs in this specific week
             let count = 0;
             let isDoneToday = false;
 
@@ -1276,9 +1123,6 @@ const HabitTrackerView: React.FC<{
                     if (ds === dateStr) isDoneToday = true;
                 }
             }
-
-            // If already done today, it's actionable (to undo).
-            // If not done today, but target reached, disable.
             if (!isDoneToday && count >= target) {
                 return { enabled: false, reason: 'Weekly target met' };
             }
@@ -1286,36 +1130,28 @@ const HabitTrackerView: React.FC<{
         else if (habit.frequency === HabitFrequency.INTERVAL) {
             const interval = habit.intervalDays || 2;
             const logDates = Object.keys(habit.logs).sort();
-
-            // Find the last completed log before today
-            // Interpretation: If there is a log within (interval - 1) days BEFORE this date, disable.
-
             const checkDate = new Date(dateStr);
 
             for (const logDateStr of logDates) {
                 if (habit.logs[logDateStr].status !== HabitStatus.DONE) continue;
-                if (logDateStr === dateStr) continue; // Ignore self (allows toggle off)
+                if (logDateStr === dateStr) continue;
 
                 const logDate = parseISO(logDateStr);
                 const diff = Math.abs(differenceInCalendarDays(checkDate, logDate));
-
                 if (diff < interval) {
                     return { enabled: false, reason: `Wait ${interval} days` };
                 }
             }
         }
-
         return { enabled: true };
     };
 
-    // --- HELPER: Calculate Group Stats ---
     const getGroupStats = (memberId: string) => {
         const memberHabits = relevantHabits.filter(h => h.userId === memberId);
         if (memberHabits.length === 0) return 0;
 
         let totalPoints = 0;
         let earnedPoints = 0;
-
         const daysToScore = viewMode === 'weekly' ? weekDays : monthDays;
 
         memberHabits.forEach(h => {
@@ -1332,7 +1168,6 @@ const HabitTrackerView: React.FC<{
                  earnedPoints += actual;
              }
         });
-
         return totalPoints === 0 ? 0 : Math.round((earnedPoints / totalPoints) * 100);
     }
 
@@ -1356,23 +1191,20 @@ const HabitTrackerView: React.FC<{
         setIsModalOpen(true);
     };
 
-    const handleDeleteHabit = (habitId: string) => {
+    const handleDeleteHabit = async (habitId: string) => {
         if (!window.confirm("Are you sure you want to delete this habit? This cannot be undone.")) return;
-        const updatedHabits = habits.filter(h => h.id !== habitId);
-        setHabits(updatedHabits);
-        saveData({ habits: updatedHabits });
+        await deleteHabit(habitId);
         setIsModalOpen(false);
         setEditingHabit(null);
     };
 
-    const handleArchiveHabit = (habitId: string) => {
-         onToggleCompletion(habitId);
-         setIsModalOpen(false); // Close modal after toggling
+    const handleArchiveHabit = async (habitId: string) => {
+         await toggleHabitCompletion(habitId);
+         setIsModalOpen(false);
     };
 
-    const handleAddSubmit = (e: React.FormEvent) => {
+    const handleAddSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-
         const habitData: Partial<Habit> = {
             title: newHabitTitle,
             frequency: newHabitFreq,
@@ -1383,17 +1215,10 @@ const HabitTrackerView: React.FC<{
         };
 
         if (editingHabit) {
-            // Update Existing
-            const updatedHabits = habits.map(h =>
-                h.id === editingHabit.id ? { ...h, ...habitData } : h
-            );
-            setHabits(updatedHabits);
-            saveData({ habits: updatedHabits });
+            await updateHabit(editingHabit.id, habitData);
         } else {
-            // Create New
-            onAddHabit(habitData);
+            await onAddHabit(habitData);
         }
-
         setIsModalOpen(false);
         setEditingHabit(null);
     };
@@ -1409,7 +1234,6 @@ const HabitTrackerView: React.FC<{
 
     return (
         <div className="space-y-6">
-            {/* Toolbar */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-xl shadow-sm">
                 <div className="flex items-center gap-2">
                     <button onClick={() => setSelectedDate(addWeeks(selectedDate, -1))} className="p-1 hover:bg-gray-100 rounded">
@@ -1479,12 +1303,8 @@ const HabitTrackerView: React.FC<{
                 </div>
             </div>
 
-            {/* Split View: Tracker & Analytics/Chat */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-                {/* LEFT COL: Habit Grid */}
                 <div className="lg:col-span-2 space-y-6">
-                    {/* Group Leaderboard (Only in Group View) */}
                     {isGroup && (
                         <div className="bg-white p-4 rounded-xl shadow-sm mb-4">
                             <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-3">Group Leaderboard ({viewMode})</h3>
@@ -1516,19 +1336,16 @@ const HabitTrackerView: React.FC<{
                         </div>
                     )}
 
-                    {/* Iterate per user in group, or just current user */}
                     {activeMembers.map(member => {
                          let memberHabits = relevantHabits.filter(h => h.userId === member?.id);
                          const isMe = member.id === currentUser.id;
                          const canEdit = isMe || isCurrentGroupAdmin;
 
-                         // Determine habits to show based on archive toggle
                          let visibleHabits = memberHabits;
                          if (hideCompleted) {
                              visibleHabits = memberHabits.filter(h => !h.completed);
                          }
 
-                         // Group into Active and Archived if we are showing archived
                          const activeHabits = visibleHabits.filter(h => !h.completed);
                          const archivedHabits = visibleHabits.filter(h => h.completed);
 
@@ -1571,7 +1388,6 @@ const HabitTrackerView: React.FC<{
                                                                     </div>
                                                                 </th>
                                                             )) : (
-                                                                // Simplified monthly header
                                                                 <th className="text-left text-xs font-medium text-gray-500 pl-4">Monthly Progress Summary</th>
                                                             )}
                                                             {viewMode === 'weekly' && <th className="text-center text-xs font-medium text-gray-500">Total</th>}
@@ -1587,7 +1403,6 @@ const HabitTrackerView: React.FC<{
                                                                         <div>
                                                                             <div className={`font-medium flex items-center gap-2 ${habit.completed ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
                                                                                 {habit.title}
-                                                                                {/* Streak Indicator */}
                                                                                 {!habit.completed && streak > 0 && (
                                                                                     <div className="flex items-center text-xs text-orange-500 bg-orange-50 px-1.5 py-0.5 rounded-full font-bold" title={`${streak} day streak`}>
                                                                                         <Icons.Flame className="w-3 h-3 mr-0.5 fill-orange-500" />
@@ -1624,18 +1439,18 @@ const HabitTrackerView: React.FC<{
                                                                     const isMissed = log?.status === HabitStatus.NOT_DONE;
 
                                                                     const { enabled, reason } = isHabitActionable(habit, d);
-                                                                    const isDisabled = (!enabled && !isDone && !isMissed) || habit.completed; // Allow unchecking if done or missed, but block if habit is completed
+                                                                    const isDisabled = (!enabled && !isDone && !isMissed) || habit.completed;
 
                                                                     return (
                                                                         <td key={dStr} className="text-center p-1">
                                                                             <button
-                                                                                disabled={isDisabled || !isMe} // Strict check: only owner can toggle daily status
+                                                                                disabled={isDisabled || !isMe}
                                                                                 onClick={() => onToggleStatus(habit.id, dStr)}
                                                                                 title={isDisabled ? (habit.completed ? 'Habit is archived' : reason) : (!isMe ? 'Only owner can mark' : '')}
                                                                                 className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
                                                                                     isDone ? 'bg-green-100 text-green-600 border border-green-200' : 
                                                                                     isMissed ? 'bg-red-100 text-red-600 border border-red-200' :
-                                                                                    'bg-transparent hover:bg-gray-100' // Keeping it minimal for pending state
+                                                                                    'bg-transparent hover:bg-gray-100'
                                                                                 } ${isDisabled ? 'opacity-30 cursor-not-allowed border-none bg-gray-50' : ''}`}
                                                                             >
                                                                                 {isDone && <Icons.Check className="w-5 h-5" />}
@@ -1676,9 +1491,7 @@ const HabitTrackerView: React.FC<{
                     })}
                 </div>
 
-                {/* RIGHT COL: Analytics & Chat */}
                 <div className="space-y-6">
-                    {/* Analytics Card */}
                     <Card className="p-6">
                         <div className="flex justify-between items-center mb-4">
                             <h3 className="font-bold text-gray-800">Your Progress</h3>
@@ -1722,7 +1535,6 @@ const HabitTrackerView: React.FC<{
                         </div>
                     </Card>
 
-                    {/* Chat Widget (If Group) */}
                     {isGroup && chatOpen && (
                         <Card className="flex flex-col h-80">
                             <div className="p-4 border-b border-gray-100 font-bold text-gray-800 flex justify-between">
@@ -1760,7 +1572,6 @@ const HabitTrackerView: React.FC<{
                 </div>
             </div>
 
-            {/* Modal */}
             <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingHabit ? "Edit Habit" : "Add New Habit"}>
                 <form onSubmit={handleAddSubmit} className="space-y-4">
                     <Input
@@ -1783,7 +1594,6 @@ const HabitTrackerView: React.FC<{
                         </select>
                     </div>
 
-                    {/* Conditional Inputs */}
                     {newHabitFreq === HabitFrequency.WEEKLY && (
                          <Input
                             label="Target Days per Week"
@@ -1813,7 +1623,6 @@ const HabitTrackerView: React.FC<{
                         onChange={e => setNewHabitDuration(e.target.value)}
                     />
 
-                    {/* Archive/Delete Actions */}
                     <div className="flex gap-3 pt-4 border-t border-gray-100 mt-2">
                          {editingHabit && (
                             <>
@@ -1854,7 +1663,7 @@ const HabitTrackerView: React.FC<{
         </div>
     );
 }
-// ... existing helpers ...
+
 const NavItem: React.FC<{ icon: React.ReactNode, label: string, isActive: boolean, onClick: () => void }> = ({ icon, label, isActive, onClick }) => (
   <button
     onClick={onClick}
