@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  CartesianGrid, 
-  Tooltip, 
-  ResponsiveContainer
+import {
+    BarChart,
+    Bar,
+    XAxis,
+    CartesianGrid,
+    Tooltip,
+    ResponsiveContainer
 } from 'recharts';
 import { format, startOfWeek, addDays, isSameDay, startOfMonth, endOfMonth, eachDayOfInterval, differenceInCalendarDays, parseISO, subDays, addWeeks } from 'date-fns';
 import ExcelJS from 'exceljs';
@@ -84,13 +84,13 @@ const App: React.FC = () => {
             const userRef = doc(db, "users", user.uid);
             const snap = await getDoc(userRef);
             if (!snap.exists()) {
-                 const newUser: User = {
-                     id: user.uid,
-                     name: user.displayName || "User",
-                     email: user.email || undefined,
-                     avatar: user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`,
-                 };
-                 await upsertUser(newUser);
+                const newUser: User = {
+                    id: user.uid,
+                    name: user.displayName || "User",
+                    email: user.email || undefined,
+                    avatar: user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`,
+                };
+                await upsertUser(newUser);
             }
         };
         syncUser();
@@ -110,7 +110,7 @@ const App: React.FC = () => {
 
         // 4. Listen to Notifications
         const unsubNotifs = onSnapshot(query(collection(db, "notifications"), where("userId", "in", [user.uid, 'ALL'])), (snap) => {
-             setNotifications(snap.docs.map(d => d.data() as Notification));
+            setNotifications(snap.docs.map(d => d.data() as Notification));
         });
 
         // Show Quote on load
@@ -128,6 +128,9 @@ const App: React.FC = () => {
     useEffect(() => {
         if (!user) return;
 
+        // Reset state to prevent stale data if user changes
+        setMyHabitsMap({});
+
         const myId = user.uid;
 
         // Listener A: My Personal Habits & My Contributions
@@ -136,9 +139,9 @@ const App: React.FC = () => {
                 const next = { ...prev };
                 snap.docChanges().forEach(change => {
                     if (change.type === 'added' || change.type === 'modified') {
-                         next[change.doc.id] = change.doc.data() as Habit;
+                        next[change.doc.id] = change.doc.data() as Habit;
                     } else if (change.type === 'removed') {
-                         delete next[change.doc.id];
+                        delete next[change.doc.id];
                     }
                 });
                 return next;
@@ -168,13 +171,19 @@ const App: React.FC = () => {
             const slicedGroups = groupIds.slice(0, 10);
 
             unsubGroupHabits = onSnapshot(query(collection(db, "habits"), where("groupId", "in", slicedGroups)), (snap) => {
-                 setGroupHabitsMap(prev => {
+                setGroupHabitsMap(prev => {
                     const next = { ...prev };
                     snap.docChanges().forEach(change => {
+                        const habit = change.doc.data() as Habit;
+
+                        // IMPORTANT: Skip my own habits here. They are handled by 'myHabitsMap' listener.
+                        // This prevents race conditions where stale group data overwrites my local updates (e.g., Archive).
+                        if (habit.userId === user.uid) return;
+
                         if (change.type === 'added' || change.type === 'modified') {
-                             next[change.doc.id] = change.doc.data() as Habit;
+                            next[change.doc.id] = habit;
                         } else if (change.type === 'removed') {
-                             delete next[change.doc.id];
+                            delete next[change.doc.id];
                         }
                     });
                     return next;
@@ -182,13 +191,13 @@ const App: React.FC = () => {
             });
 
             unsubGroupMessages = onSnapshot(query(collection(db, "messages"), where("groupId", "in", slicedGroups)), (snap) => {
-                 setMessagesMap(prev => {
+                setMessagesMap(prev => {
                     const next = { ...prev };
                     snap.docChanges().forEach(change => {
                         if (change.type === 'added' || change.type === 'modified') {
-                             next[change.doc.id] = change.doc.data() as ChatMessage;
+                            next[change.doc.id] = change.doc.data() as ChatMessage;
                         } else if (change.type === 'removed') {
-                             delete next[change.doc.id];
+                            delete next[change.doc.id];
                         }
                     });
                     return next;
@@ -218,36 +227,36 @@ const App: React.FC = () => {
     };
 
     const handleUpdateProfile = async (e: React.FormEvent) => {
-          e.preventDefault();
-          if (!currentUser) return;
-          const updatedUser = { ...currentUser, name: editProfileName, avatar: editProfileAvatar };
-          await upsertUser(updatedUser);
-          setIsProfileModalOpen(false);
+        e.preventDefault();
+        if (!currentUser) return;
+        const updatedUser = { ...currentUser, name: editProfileName, avatar: editProfileAvatar };
+        await upsertUser(updatedUser);
+        setIsProfileModalOpen(false);
     };
 
     const openProfileModal = () => {
-          if (!currentUser) return;
-          setEditProfileName(currentUser.name);
-          setEditProfileAvatar(currentUser.avatar);
-          setIsProfileModalOpen(true);
+        if (!currentUser) return;
+        setEditProfileName(currentUser.name);
+        setEditProfileAvatar(currentUser.avatar);
+        setIsProfileModalOpen(true);
     };
 
     const randomizeAvatar = () => {
-          setEditProfileAvatar(`https://api.dicebear.com/7.x/avataaars/svg?seed=${Math.random()}`);
+        setEditProfileAvatar(`https://api.dicebear.com/7.x/avataaars/svg?seed=${Math.random()}`);
     };
 
     const ensureUserByEmail = async (email: string): Promise<User> => {
-          const existingUser = users.find(u => u.email === email);
-          if (existingUser) return existingUser;
+        const existingUser = users.find(u => u.email === email);
+        if (existingUser) return existingUser;
 
-          const newUser: User = {
-              id: `u${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-              name: email.split('@')[0],
-              email: email,
-              avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`
-          };
-          await upsertUser(newUser);
-          return newUser;
+        const newUser: User = {
+            id: `u${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+            name: email.split('@')[0],
+            email: email,
+            avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`
+        };
+        await upsertUser(newUser);
+        return newUser;
     };
 
     const toggleHabitStatus = async (habitId: string, dateStr: string) => {
@@ -267,9 +276,9 @@ const App: React.FC = () => {
             delete newLogs[dateStr];
         } else {
             newLogs[dateStr] = {
-              date: dateStr,
-              status: newStatus,
-              timestamp: Date.now()
+                date: dateStr,
+                status: newStatus,
+                timestamp: Date.now()
             };
         }
 
@@ -311,7 +320,7 @@ const App: React.FC = () => {
             durationMinutes: habitData.durationMinutes,
             targetDaysPerWeek: habitData.targetDaysPerWeek,
             intervalDays: habitData.intervalDays,
-            groupId: habitData.groupId,
+            groupId: habitData.groupId || null, // Ensure explicit null for personal habits
             logs: {},
             completed: false,
             createdAt: Date.now()
@@ -322,11 +331,11 @@ const App: React.FC = () => {
     const sendMessage = async (text: string) => {
         if (!currentUser || !activeGroupId) return;
         const newMsg: ChatMessage = {
-          id: `m${Date.now()}`,
-          groupId: activeGroupId,
-          userId: currentUser.id,
-          text,
-          timestamp: Date.now()
+            id: `m${Date.now()}`,
+            groupId: activeGroupId,
+            userId: currentUser.id,
+            text,
+            timestamp: Date.now()
         };
         await createMessage(newMsg);
     };
@@ -336,11 +345,11 @@ const App: React.FC = () => {
         if (!currentUser || !newGroupName.trim()) return;
 
         const newGroup: Group = {
-          id: `g${Date.now()}`,
-          name: newGroupName,
-          members: [currentUser.id, ...selectedFriendIds],
-          admins: [currentUser.id],
-          inviteCode: Math.random().toString(36).substring(2, 8).toUpperCase()
+            id: `g${Date.now()}`,
+            name: newGroupName,
+            members: [currentUser.id, ...selectedFriendIds],
+            admins: [currentUser.id],
+            inviteCode: Math.random().toString(36).substring(2, 8).toUpperCase()
         };
 
         await createGroup(newGroup);
@@ -355,26 +364,26 @@ const App: React.FC = () => {
     };
 
     const handleAddEmailToCreateGroup = async () => {
-          if (!createGroupEmailInput.trim() || !createGroupEmailInput.includes('@')) return;
-          const user = await ensureUserByEmail(createGroupEmailInput.trim());
-          if (!selectedFriendIds.includes(user.id)) {
-              setSelectedFriendIds([...selectedFriendIds, user.id]);
-          }
-          setCreateGroupEmailInput('');
+        if (!createGroupEmailInput.trim() || !createGroupEmailInput.includes('@')) return;
+        const user = await ensureUserByEmail(createGroupEmailInput.trim());
+        if (!selectedFriendIds.includes(user.id)) {
+            setSelectedFriendIds([...selectedFriendIds, user.id]);
+        }
+        setCreateGroupEmailInput('');
     };
 
     const handleInviteMember = async (e: React.FormEvent) => {
-          e.preventDefault();
-          if (!activeGroupId || !inviteEmail.trim() || !inviteEmail.includes('@')) return;
+        e.preventDefault();
+        if (!activeGroupId || !inviteEmail.trim() || !inviteEmail.includes('@')) return;
 
-          const user = await ensureUserByEmail(inviteEmail.trim());
-          const group = groups.find(g => g.id === activeGroupId);
-          if (group && !group.members.includes(user.id)) {
-               await updateGroup(activeGroupId, { members: [...group.members, user.id] });
-               setIsInviteModalOpen(false);
-               setInviteEmail('');
-               alert(`${user.name} added to the group!`);
-          }
+        const user = await ensureUserByEmail(inviteEmail.trim());
+        const group = groups.find(g => g.id === activeGroupId);
+        if (group && !group.members.includes(user.id)) {
+            await updateGroup(activeGroupId, { members: [...group.members, user.id] });
+            setIsInviteModalOpen(false);
+            setInviteEmail('');
+            alert(`${user.name} added to the group!`);
+        }
     };
 
     const handlePromoteAdmin = async (userId: string) => {
@@ -389,11 +398,11 @@ const App: React.FC = () => {
         if (!activeGroupId) return;
         const group = groups.find(g => g.id === activeGroupId);
         if (group && group.admins && group.admins.includes(userId)) {
-             if (group.admins.length > 1) {
+            if (group.admins.length > 1) {
                 await updateGroup(activeGroupId, { admins: group.admins.filter(id => id !== userId) });
-             } else {
+            } else {
                 alert("Group must have at least one admin.");
-             }
+            }
         }
     };
 
@@ -407,10 +416,10 @@ const App: React.FC = () => {
         }
 
         if (group) {
-             await updateGroup(activeGroupId, {
-                 members: group.members.filter(m => m !== userId),
-                 admins: (group.admins || []).filter(a => a !== userId)
-             });
+            await updateGroup(activeGroupId, {
+                members: group.members.filter(m => m !== userId),
+                admins: (group.admins || []).filter(a => a !== userId)
+            });
         }
     };
 
@@ -426,363 +435,363 @@ const App: React.FC = () => {
 
     const getAIAnalysis = async () => {
         if (!currentUser) return;
-          setIsAiLoading(true);
+        setIsAiLoading(true);
 
         const relevantHabits = activeGroupId
             ? habits.filter(h => h.groupId === activeGroupId && h.userId === currentUser.id)
             : habits.filter(h => h.userId === currentUser.id && !h.groupId);
 
         const insight = await generateHabitInsights(currentUser, relevantHabits, 'weekly');
-          setAiInsight(insight);
-          setIsAiLoading(false);
-      };
+        setAiInsight(insight);
+        setIsAiLoading(false);
+    };
 
-      const toggleFriendSelection = (userId: string) => {
+    const toggleFriendSelection = (userId: string) => {
         setSelectedFriendIds(prev =>
-          prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]
+            prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]
         );
-      };
+    };
 
-      const activeGroup = groups.find(g => g.id === activeGroupId);
-      const unreadCount = notifications.filter(n => n.userId === currentUser?.id && !n.read).length;
+    const activeGroup = groups.find(g => g.id === activeGroupId);
+    const unreadCount = notifications.filter(n => n.userId === currentUser?.id && !n.read).length;
 
-      return (
+    return (
         <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row">
-          <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out md:translate-x-0 md:static ${showMobileMenu ? 'translate-x-0' : '-translate-x-full'}`}>
-            <div className="h-full flex flex-col">
-              <div className="p-6 flex items-center justify-between border-b border-gray-100">
-                <h1 className="text-2xl font-bold text-indigo-600 flex items-center gap-2">
-                  <Icons.Activity className="w-6 h-6" />
-                  HabitSync
-                </h1>
-                <button onClick={() => setShowMobileMenu(false)} className="md:hidden text-gray-500">
-                  <Icons.X className="w-6 h-6" />
-                </button>
-              </div>
+            <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out md:translate-x-0 md:static ${showMobileMenu ? 'translate-x-0' : '-translate-x-full'}`}>
+                <div className="h-full flex flex-col">
+                    <div className="p-6 flex items-center justify-between border-b border-gray-100">
+                        <h1 className="text-2xl font-bold text-indigo-600 flex items-center gap-2">
+                            <Icons.Activity className="w-6 h-6" />
+                            HabitSync
+                        </h1>
+                        <button onClick={() => setShowMobileMenu(false)} className="md:hidden text-gray-500">
+                            <Icons.X className="w-6 h-6" />
+                        </button>
+                    </div>
 
-              <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
-                <NavItem
-                  icon={<Icons.BarChart2 className="w-5 h-5" />}
-                  label="Dashboard"
-                  isActive={currentView === 'dashboard'}
-                  onClick={() => { setCurrentView('dashboard'); setActiveGroupId(null); setShowMobileMenu(false); }}
-                />
-                <NavItem
-                  icon={<Icons.User className="w-5 h-5" />}
-                  label="Personal Space"
-                  isActive={currentView === 'personal'}
-                  onClick={() => { setCurrentView('personal'); setActiveGroupId(null); setShowMobileMenu(false); }}
-                />
-                <NavItem
-                    icon={
-                        <div className="relative">
-                            <Icons.Bell className="w-5 h-5" />
-                            {unreadCount > 0 && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full"></span>}
+                    <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+                        <NavItem
+                            icon={<Icons.BarChart2 className="w-5 h-5" />}
+                            label="Dashboard"
+                            isActive={currentView === 'dashboard'}
+                            onClick={() => { setCurrentView('dashboard'); setActiveGroupId(null); setShowMobileMenu(false); }}
+                        />
+                        <NavItem
+                            icon={<Icons.User className="w-5 h-5" />}
+                            label="Personal Space"
+                            isActive={currentView === 'personal'}
+                            onClick={() => { setCurrentView('personal'); setActiveGroupId(null); setShowMobileMenu(false); }}
+                        />
+                        <NavItem
+                            icon={
+                                <div className="relative">
+                                    <Icons.Bell className="w-5 h-5" />
+                                    {unreadCount > 0 && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full"></span>}
+                                </div>
+                            }
+                            label="Notifications"
+                            isActive={currentView === 'notifications'}
+                            onClick={() => { setCurrentView('notifications'); setActiveGroupId(null); setShowMobileMenu(false); markNotificationsRead(); }}
+                        />
+
+                        <div className="pt-4 pb-2">
+                            <p className="px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Groups</p>
                         </div>
-                    }
-                    label="Notifications"
-                    isActive={currentView === 'notifications'}
-                    onClick={() => { setCurrentView('notifications'); setActiveGroupId(null); setShowMobileMenu(false); markNotificationsRead(); }}
-                />
+                        {groups.filter(g => g.members.includes(currentUser?.id || '')).map(group => (
+                            <NavItem
+                                key={group.id}
+                                icon={<Icons.Users className="w-5 h-5" />}
+                                label={group.name}
+                                isActive={currentView === 'group' && activeGroupId === group.id}
+                                onClick={() => { setCurrentView('group'); setActiveGroupId(group.id); setShowMobileMenu(false); }}
+                            />
+                        ))}
+                        <button
+                            onClick={() => setIsCreateGroupModalOpen(true)}
+                            className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-gray-600 rounded-xl hover:bg-gray-50 transition-colors border border-dashed border-gray-300 mt-2"
+                        >
+                            <Icons.Plus className="w-5 h-5" /> Create Group
+                        </button>
+                    </nav>
 
-                <div className="pt-4 pb-2">
-                  <p className="px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Groups</p>
-                </div>
-                {groups.filter(g => g.members.includes(currentUser?.id || '')).map(group => (
-                  <NavItem
-                    key={group.id}
-                    icon={<Icons.Users className="w-5 h-5" />}
-                    label={group.name}
-                    isActive={currentView === 'group' && activeGroupId === group.id}
-                    onClick={() => { setCurrentView('group'); setActiveGroupId(group.id); setShowMobileMenu(false); }}
-                  />
-                ))}
-                <button
-                  onClick={() => setIsCreateGroupModalOpen(true)}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-gray-600 rounded-xl hover:bg-gray-50 transition-colors border border-dashed border-gray-300 mt-2"
-                >
-                  <Icons.Plus className="w-5 h-5" /> Create Group
-                </button>
-              </nav>
-
-              <div className="p-4 border-t border-gray-100">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="relative">
-                      <img src={currentUser?.avatar} alt="Profile" className="w-10 h-10 rounded-full bg-gray-200" />
-                      <button
-                        onClick={openProfileModal}
-                        className="absolute -bottom-1 -right-1 bg-white border border-gray-200 rounded-full p-0.5 text-gray-500 hover:text-indigo-600"
-                        title="Edit Profile"
-                      >
-                          <Icons.Edit className="w-3 h-3" />
-                      </button>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">{currentUser?.name}</p>
-                    <p className="text-xs text-gray-500 truncate">{currentUser?.mobile || currentUser?.email}</p>
-                  </div>
-                </div>
-                <button onClick={handleLogout} className="w-full flex items-center gap-2 text-sm text-red-600 hover:text-red-700 font-medium">
-                  <Icons.LogOut className="w-4 h-4" /> Sign Out
-                </button>
-              </div>
-            </div>
-          </aside>
-
-          <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
-            <header className="bg-white border-b border-gray-200 p-4 flex justify-between items-center shrink-0">
-              <div className="flex items-center gap-3">
-                 <button onClick={() => setShowMobileMenu(true)} className="md:hidden text-gray-600">
-                  <Icons.Menu className="w-6 h-6" />
-                </button>
-                <h2 className="text-xl font-semibold text-gray-800">
-                  {currentView === 'dashboard' && 'Overview'}
-                  {currentView === 'personal' && 'Personal Habits'}
-                  {currentView === 'notifications' && 'Notifications'}
-                  {currentView === 'group' && activeGroup?.name}
-                </h2>
-              </div>
-              <div className="flex items-center gap-4">
-                <button
-                    onClick={() => { setCurrentView('notifications'); markNotificationsRead(); }}
-                    className="text-gray-500 hover:text-indigo-600 relative"
-                >
-                     <Icons.Bell className="w-6 h-6" />
-                     {unreadCount > 0 && (
-                       <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white"></span>
-                     )}
-                </button>
-              </div>
-            </header>
-
-            <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8">
-                {currentView === 'dashboard' && (
-                    <DashboardView
-                        user={currentUser!}
-                        habits={habits}
-                        groups={groups}
-                        notifications={notifications}
-                    />
-                )}
-                 {currentView === 'notifications' && (
-                    <NotificationsView
-                        notifications={notifications}
-                        user={currentUser!}
-                    />
-                )}
-                {(currentView === 'personal' || currentView === 'group') && (
-                    <HabitTrackerView
-                        key={activeGroupId || 'personal'}
-                        isGroup={currentView === 'group'}
-                        activeGroupId={activeGroupId}
-                        habits={habits}
-                        setHabits={() => {}} // Removed direct setter, handled via Add Habit
-                        users={users}
-                        groups={groups}
-                        currentUser={currentUser!}
-                        selectedDate={selectedDate}
-                        setSelectedDate={setSelectedDate}
-                        onToggleStatus={toggleHabitStatus}
-                        onToggleCompletion={toggleHabitCompletion}
-                        onAddHabit={addNewHabit}
-                        onGetAI={getAIAnalysis}
-                        aiInsight={aiInsight}
-                        isAiLoading={isAiLoading}
-                        setAiInsight={setAiInsight}
-                        messages={messages}
-                        onSendMessage={sendMessage}
-                        onOpenInvite={() => setIsInviteModalOpen(true)}
-                        onOpenManageGroup={() => setIsManageGroupModalOpen(true)}
-                    />
-                )}
-            </div>
-          </main>
-
-          <Modal isOpen={isWelcomeModalOpen} onClose={() => setIsWelcomeModalOpen(false)} title="Daily Inspiration">
-            <div className="text-center py-6">
-                <div className="mb-4">
-                    <Icons.BrainCircuit className="w-12 h-12 text-indigo-500 mx-auto opacity-80" />
-                </div>
-                <p className="text-xl font-medium text-gray-800 italic mb-2">"{welcomeQuote.split('–')[0].trim()}"</p>
-                {welcomeQuote.includes('–') && (
-                    <p className="text-sm text-gray-500 mt-2">— {welcomeQuote.split('–')[1].trim()}</p>
-                )}
-                <div className="mt-8">
-                    <Button onClick={() => setIsWelcomeModalOpen(false)} className="w-full">Let's do this!</Button>
-                </div>
-            </div>
-          </Modal>
-
-          <Modal isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} title="Edit Profile">
-              <form onSubmit={handleUpdateProfile} className="space-y-4">
-                  <div className="flex flex-col items-center mb-4">
-                      <div className="relative group cursor-pointer" onClick={randomizeAvatar}>
-                        <img src={editProfileAvatar} className="w-20 h-20 rounded-full bg-gray-100 mb-2" />
-                        <div className="absolute inset-0 bg-black bg-opacity-30 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                             <Icons.RefreshCw className="w-6 h-6 text-white" />
+                    <div className="p-4 border-t border-gray-100">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="relative">
+                                <img src={currentUser?.avatar} alt="Profile" className="w-10 h-10 rounded-full bg-gray-200" />
+                                <button
+                                    onClick={openProfileModal}
+                                    className="absolute -bottom-1 -right-1 bg-white border border-gray-200 rounded-full p-0.5 text-gray-500 hover:text-indigo-600"
+                                    title="Edit Profile"
+                                >
+                                    <Icons.Edit className="w-3 h-3" />
+                                </button>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-gray-900 truncate">{currentUser?.name}</p>
+                                <p className="text-xs text-gray-500 truncate">{currentUser?.mobile || currentUser?.email}</p>
+                            </div>
                         </div>
-                      </div>
-                      <span className="text-xs text-gray-400">Click avatar to randomize</span>
-                  </div>
-                  <Input
-                      label="Display Name"
-                      value={editProfileName}
-                      onChange={e => setEditProfileName(e.target.value)}
-                      required
-                  />
-                  <Input
-                      label="Avatar URL (Optional)"
-                      value={editProfileAvatar}
-                      onChange={e => setEditProfileAvatar(e.target.value)}
-                  />
-                  <div className="flex gap-3 pt-2">
-                      <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsProfileModalOpen(false)}>Cancel</Button>
-                      <Button type="submit" className="flex-1">Save Profile</Button>
-                  </div>
-              </form>
-          </Modal>
+                        <button onClick={handleLogout} className="w-full flex items-center gap-2 text-sm text-red-600 hover:text-red-700 font-medium">
+                            <Icons.LogOut className="w-4 h-4" /> Sign Out
+                        </button>
+                    </div>
+                </div>
+            </aside>
 
-          <Modal isOpen={isCreateGroupModalOpen} onClose={() => setIsCreateGroupModalOpen(false)} title="Create New Group">
-              <form onSubmit={handleCreateGroup} className="space-y-4">
-                  <Input
-                      label="Group Name"
-                      placeholder="e.g., Early Risers"
-                      value={newGroupName}
-                      onChange={e => setNewGroupName(e.target.value)}
-                      required
-                  />
+            <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
+                <header className="bg-white border-b border-gray-200 p-4 flex justify-between items-center shrink-0">
+                    <div className="flex items-center gap-3">
+                        <button onClick={() => setShowMobileMenu(true)} className="md:hidden text-gray-600">
+                            <Icons.Menu className="w-6 h-6" />
+                        </button>
+                        <h2 className="text-xl font-semibold text-gray-800">
+                            {currentView === 'dashboard' && 'Overview'}
+                            {currentView === 'personal' && 'Personal Habits'}
+                            {currentView === 'notifications' && 'Notifications'}
+                            {currentView === 'group' && activeGroup?.name}
+                        </h2>
+                    </div>
+                    <div className="flex items-center gap-4">
+                        <button
+                            onClick={() => { setCurrentView('notifications'); markNotificationsRead(); }}
+                            className="text-gray-500 hover:text-indigo-600 relative"
+                        >
+                            <Icons.Bell className="w-6 h-6" />
+                            {unreadCount > 0 && (
+                                <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white"></span>
+                            )}
+                        </button>
+                    </div>
+                </header>
 
-                  <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Add Friends</label>
-                      <div className="flex gap-2 mb-3">
-                          <input
-                            type="email"
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                            placeholder="Invite via email (e.g. john@gmail.com)"
-                            value={createGroupEmailInput}
-                            onChange={e => setCreateGroupEmailInput(e.target.value)}
-                          />
-                          <Button type="button" variant="secondary" className="py-1 px-3 text-sm" onClick={handleAddEmailToCreateGroup}>
-                              Add
-                          </Button>
-                      </div>
+                <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8">
+                    {currentView === 'dashboard' && (
+                        <DashboardView
+                            user={currentUser!}
+                            habits={habits}
+                            groups={groups}
+                            notifications={notifications}
+                        />
+                    )}
+                    {currentView === 'notifications' && (
+                        <NotificationsView
+                            notifications={notifications}
+                            user={currentUser!}
+                        />
+                    )}
+                    {(currentView === 'personal' || currentView === 'group') && (
+                        <HabitTrackerView
+                            key={activeGroupId || 'personal'}
+                            isGroup={currentView === 'group'}
+                            activeGroupId={activeGroupId}
+                            habits={habits}
+                            setHabits={() => {}} // Removed direct setter, handled via Add Habit
+                            users={users}
+                            groups={groups}
+                            currentUser={currentUser!}
+                            selectedDate={selectedDate}
+                            setSelectedDate={setSelectedDate}
+                            onToggleStatus={toggleHabitStatus}
+                            onToggleCompletion={toggleHabitCompletion}
+                            onAddHabit={addNewHabit}
+                            onGetAI={getAIAnalysis}
+                            aiInsight={aiInsight}
+                            isAiLoading={isAiLoading}
+                            setAiInsight={setAiInsight}
+                            messages={messages}
+                            onSendMessage={sendMessage}
+                            onOpenInvite={() => setIsInviteModalOpen(true)}
+                            onOpenManageGroup={() => setIsManageGroupModalOpen(true)}
+                        />
+                    )}
+                </div>
+            </main>
 
-                      <div className="space-y-2 max-h-48 overflow-y-auto border border-gray-100 rounded-lg p-2">
-                          {users.filter(u => u.id !== currentUser?.id).map(u => (
-                              <div key={u.id} className="flex items-center justify-between p-2 hover:bg-gray-50 rounded-md cursor-pointer" onClick={() => toggleFriendSelection(u.id)}>
-                                  <div className="flex items-center gap-2">
-                                      <img src={u.avatar} className="w-8 h-8 rounded-full" />
-                                      <div className="flex flex-col">
-                                          <span className="text-sm font-medium text-gray-700">{u.name}</span>
-                                          {u.email && <span className="text-xs text-gray-400">{u.email}</span>}
-                                      </div>
-                                  </div>
-                                  <div className={`w-5 h-5 rounded border flex items-center justify-center ${selectedFriendIds.includes(u.id) ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'}`}>
-                                      {selectedFriendIds.includes(u.id) && <Icons.Check className="w-3 h-3 text-white" />}
-                                  </div>
-                              </div>
-                          ))}
-                          {users.filter(u => u.id !== currentUser?.id).length === 0 && (
-                              <p className="text-xs text-gray-400 text-center py-2">No other users found. Add by email above.</p>
-                          )}
-                      </div>
-                  </div>
+            <Modal isOpen={isWelcomeModalOpen} onClose={() => setIsWelcomeModalOpen(false)} title="Daily Inspiration">
+                <div className="text-center py-6">
+                    <div className="mb-4">
+                        <Icons.BrainCircuit className="w-12 h-12 text-indigo-500 mx-auto opacity-80" />
+                    </div>
+                    <p className="text-xl font-medium text-gray-800 italic mb-2">"{welcomeQuote.split('–')[0].trim()}"</p>
+                    {welcomeQuote.includes('–') && (
+                        <p className="text-sm text-gray-500 mt-2">— {welcomeQuote.split('–')[1].trim()}</p>
+                    )}
+                    <div className="mt-8">
+                        <Button onClick={() => setIsWelcomeModalOpen(false)} className="w-full">Let's do this!</Button>
+                    </div>
+                </div>
+            </Modal>
 
-                  <div className="flex gap-3 pt-2">
-                      <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsCreateGroupModalOpen(false)}>Cancel</Button>
-                      <Button type="submit" className="flex-1">Create Group</Button>
-                  </div>
-              </form>
-          </Modal>
+            <Modal isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} title="Edit Profile">
+                <form onSubmit={handleUpdateProfile} className="space-y-4">
+                    <div className="flex flex-col items-center mb-4">
+                        <div className="relative group cursor-pointer" onClick={randomizeAvatar}>
+                            <img src={editProfileAvatar} className="w-20 h-20 rounded-full bg-gray-100 mb-2" />
+                            <div className="absolute inset-0 bg-black bg-opacity-30 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Icons.RefreshCw className="w-6 h-6 text-white" />
+                            </div>
+                        </div>
+                        <span className="text-xs text-gray-400">Click avatar to randomize</span>
+                    </div>
+                    <Input
+                        label="Display Name"
+                        value={editProfileName}
+                        onChange={e => setEditProfileName(e.target.value)}
+                        required
+                    />
+                    <Input
+                        label="Avatar URL (Optional)"
+                        value={editProfileAvatar}
+                        onChange={e => setEditProfileAvatar(e.target.value)}
+                    />
+                    <div className="flex gap-3 pt-2">
+                        <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsProfileModalOpen(false)}>Cancel</Button>
+                        <Button type="submit" className="flex-1">Save Profile</Button>
+                    </div>
+                </form>
+            </Modal>
 
-          <Modal isOpen={isInviteModalOpen} onClose={() => setIsInviteModalOpen(false)} title="Invite Member to Group">
-              <form onSubmit={handleInviteMember} className="space-y-4">
-                  <p className="text-sm text-gray-600">Enter the email address of the person you want to invite to <strong>{activeGroup?.name}</strong>. If they don't have an account, one will be created for them to log in later.</p>
-                  <Input
-                      label="Email Address"
-                      placeholder="e.g., friend@example.com"
-                      type="email"
-                      value={inviteEmail}
-                      onChange={e => setInviteEmail(e.target.value)}
-                      required
-                  />
-                  <div className="flex gap-3 pt-2">
-                      <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsInviteModalOpen(false)}>Cancel</Button>
-                      <Button type="submit" className="flex-1">Send Invite</Button>
-                  </div>
-              </form>
-          </Modal>
+            <Modal isOpen={isCreateGroupModalOpen} onClose={() => setIsCreateGroupModalOpen(false)} title="Create New Group">
+                <form onSubmit={handleCreateGroup} className="space-y-4">
+                    <Input
+                        label="Group Name"
+                        placeholder="e.g., Early Risers"
+                        value={newGroupName}
+                        onChange={e => setNewGroupName(e.target.value)}
+                        required
+                    />
 
-          <Modal isOpen={isManageGroupModalOpen} onClose={() => setIsManageGroupModalOpen(false)} title={`Manage ${activeGroup?.name}`}>
-              <div className="space-y-4">
-                 <p className="text-sm text-gray-600 mb-2">Members of this group:</p>
-                 <div className="space-y-2 max-h-64 overflow-y-auto">
-                    {activeGroup?.members.map(memberId => {
-                        const member = users.find(u => u.id === memberId);
-                        const isAdmin = activeGroup.admins?.includes(memberId);
-                        const isMe = memberId === currentUser?.id;
-                        const amIAdmin = activeGroup.admins?.includes(currentUser?.id || '');
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Add Friends</label>
+                        <div className="flex gap-2 mb-3">
+                            <input
+                                type="email"
+                                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                                placeholder="Invite via email (e.g. john@gmail.com)"
+                                value={createGroupEmailInput}
+                                onChange={e => setCreateGroupEmailInput(e.target.value)}
+                            />
+                            <Button type="button" variant="secondary" className="py-1 px-3 text-sm" onClick={handleAddEmailToCreateGroup}>
+                                Add
+                            </Button>
+                        </div>
 
-                        if (!member) return null;
+                        <div className="space-y-2 max-h-48 overflow-y-auto border border-gray-100 rounded-lg p-2">
+                            {users.filter(u => u.id !== currentUser?.id).map(u => (
+                                <div key={u.id} className="flex items-center justify-between p-2 hover:bg-gray-50 rounded-md cursor-pointer" onClick={() => toggleFriendSelection(u.id)}>
+                                    <div className="flex items-center gap-2">
+                                        <img src={u.avatar} className="w-8 h-8 rounded-full" />
+                                        <div className="flex flex-col">
+                                            <span className="text-sm font-medium text-gray-700">{u.name}</span>
+                                            {u.email && <span className="text-xs text-gray-400">{u.email}</span>}
+                                        </div>
+                                    </div>
+                                    <div className={`w-5 h-5 rounded border flex items-center justify-center ${selectedFriendIds.includes(u.id) ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'}`}>
+                                        {selectedFriendIds.includes(u.id) && <Icons.Check className="w-3 h-3 text-white" />}
+                                    </div>
+                                </div>
+                            ))}
+                            {users.filter(u => u.id !== currentUser?.id).length === 0 && (
+                                <p className="text-xs text-gray-400 text-center py-2">No other users found. Add by email above.</p>
+                            )}
+                        </div>
+                    </div>
 
-                        return (
-                            <div key={memberId} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
-                                 <div className="flex items-center gap-3">
-                                     <img src={member.avatar} className="w-10 h-10 rounded-full" />
-                                     <div>
-                                         <div className="flex items-center gap-1">
-                                            <span className="font-medium text-gray-900">{member.name}</span>
-                                            {isAdmin && (
-                                                <span title="Admin">
+                    <div className="flex gap-3 pt-2">
+                        <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsCreateGroupModalOpen(false)}>Cancel</Button>
+                        <Button type="submit" className="flex-1">Create Group</Button>
+                    </div>
+                </form>
+            </Modal>
+
+            <Modal isOpen={isInviteModalOpen} onClose={() => setIsInviteModalOpen(false)} title="Invite Member to Group">
+                <form onSubmit={handleInviteMember} className="space-y-4">
+                    <p className="text-sm text-gray-600">Enter the email address of the person you want to invite to <strong>{activeGroup?.name}</strong>. If they don't have an account, one will be created for them to log in later.</p>
+                    <Input
+                        label="Email Address"
+                        placeholder="e.g., friend@example.com"
+                        type="email"
+                        value={inviteEmail}
+                        onChange={e => setInviteEmail(e.target.value)}
+                        required
+                    />
+                    <div className="flex gap-3 pt-2">
+                        <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsInviteModalOpen(false)}>Cancel</Button>
+                        <Button type="submit" className="flex-1">Send Invite</Button>
+                    </div>
+                </form>
+            </Modal>
+
+            <Modal isOpen={isManageGroupModalOpen} onClose={() => setIsManageGroupModalOpen(false)} title={`Manage ${activeGroup?.name}`}>
+                <div className="space-y-4">
+                    <p className="text-sm text-gray-600 mb-2">Members of this group:</p>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                        {activeGroup?.members.map(memberId => {
+                            const member = users.find(u => u.id === memberId);
+                            const isAdmin = activeGroup.admins?.includes(memberId);
+                            const isMe = memberId === currentUser?.id;
+                            const amIAdmin = activeGroup.admins?.includes(currentUser?.id || '');
+
+                            if (!member) return null;
+
+                            return (
+                                <div key={memberId} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
+                                    <div className="flex items-center gap-3">
+                                        <img src={member.avatar} className="w-10 h-10 rounded-full" />
+                                        <div>
+                                            <div className="flex items-center gap-1">
+                                                <span className="font-medium text-gray-900">{member.name}</span>
+                                                {isAdmin && (
+                                                    <span title="Admin">
                                                     <Icons.ShieldCheck className="w-4 h-4 text-indigo-600" />
                                                 </span>
+                                                )}
+                                            </div>
+                                            <div className="text-xs text-gray-500">{member.email || member.mobile}</div>
+                                        </div>
+                                    </div>
+                                    {amIAdmin && !isMe && (
+                                        <div className="flex gap-2">
+                                            {!isAdmin ? (
+                                                <Button
+                                                    variant="secondary"
+                                                    className="px-2 py-1 text-xs"
+                                                    onClick={() => handlePromoteAdmin(memberId)}
+                                                    title="Promote to Admin"
+                                                >
+                                                    <Icons.Shield className="w-4 h-4" />
+                                                </Button>
+                                            ) : (
+                                                <Button
+                                                    variant="secondary"
+                                                    className="px-2 py-1 text-xs"
+                                                    onClick={() => handleDemoteAdmin(memberId)}
+                                                    title="Remove Admin"
+                                                >
+                                                    <Icons.ShieldOff className="w-4 h-4 text-gray-500" />
+                                                </Button>
                                             )}
-                                         </div>
-                                         <div className="text-xs text-gray-500">{member.email || member.mobile}</div>
-                                     </div>
-                                 </div>
-                                 {amIAdmin && !isMe && (
-                                     <div className="flex gap-2">
-                                         {!isAdmin ? (
-                                             <Button
-                                                variant="secondary"
+                                            <Button
+                                                variant="danger"
                                                 className="px-2 py-1 text-xs"
-                                                onClick={() => handlePromoteAdmin(memberId)}
-                                                title="Promote to Admin"
-                                             >
-                                                 <Icons.Shield className="w-4 h-4" />
-                                             </Button>
-                                         ) : (
-                                             <Button
-                                                variant="secondary"
-                                                className="px-2 py-1 text-xs"
-                                                onClick={() => handleDemoteAdmin(memberId)}
-                                                title="Remove Admin"
-                                             >
-                                                 <Icons.ShieldOff className="w-4 h-4 text-gray-500" />
-                                             </Button>
-                                         )}
-                                         <Button
-                                            variant="danger"
-                                            className="px-2 py-1 text-xs"
-                                            onClick={() => handleRemoveMember(memberId)}
-                                            title="Remove User"
-                                        >
-                                             <Icons.UserMinus className="w-4 h-4" />
-                                         </Button>
-                                     </div>
-                                 )}
-                            </div>
-                        )
-                    })}
-                 </div>
-                 <Button variant="secondary" className="w-full" onClick={() => setIsManageGroupModalOpen(false)}>Close</Button>
-              </div>
-          </Modal>
+                                                onClick={() => handleRemoveMember(memberId)}
+                                                title="Remove User"
+                                            >
+                                                <Icons.UserMinus className="w-4 h-4" />
+                                            </Button>
+                                        </div>
+                                    )}
+                                </div>
+                            )
+                        })}
+                    </div>
+                    <Button variant="secondary" className="w-full" onClick={() => setIsManageGroupModalOpen(false)}>Close</Button>
+                </div>
+            </Modal>
 
         </div>
-      );
-    };
+    );
+};
 
 const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], notifications: Notification[] }> = ({ user, habits, groups, notifications }) => {
     // Calculate global stats
@@ -867,11 +876,11 @@ const NotificationsView: React.FC<{ notifications: Notification[], user: User }>
                 ))}
                 {myNotifications.length === 0 && (
                     <div className="text-center py-12">
-                         <div className="bg-gray-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                             <Icons.Bell className="w-8 h-8 text-gray-400" />
-                         </div>
-                         <h3 className="text-gray-900 font-medium">No notifications yet</h3>
-                         <p className="text-gray-500 text-sm mt-1">Activity from your groups will appear here.</p>
+                        <div className="bg-gray-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <Icons.Bell className="w-8 h-8 text-gray-400" />
+                        </div>
+                        <h3 className="text-gray-900 font-medium">No notifications yet</h3>
+                        <p className="text-gray-500 text-sm mt-1">Activity from your groups will appear here.</p>
                     </div>
                 )}
             </div>
@@ -1000,9 +1009,9 @@ const HabitTrackerView: React.FC<{
         summaryData.forEach((d, index) => {
             const row = summarySheet.addRow({ ...d, rank: index + 1 });
             if ((index + 1) % 2 === 0) {
-                 row.eachCell(cell => {
-                     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9FAFB' } };
-                 });
+                row.eachCell(cell => {
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9FAFB' } };
+                });
             }
             row.eachCell(cell => {
                 cell.border = {
@@ -1020,58 +1029,58 @@ const HabitTrackerView: React.FC<{
         const daysToMap = viewMode === 'weekly' ? weekDays : monthDays;
 
         detailSheet.columns = [
-             { key: 'member', width: 20 },
-             { key: 'habit', width: 25 },
-             { key: 'freq', width: 25 },
-             ...daysToMap.map(() => ({ width: 14 })),
-             { key: 'total', width: 10 }
+            { key: 'member', width: 20 },
+            { key: 'habit', width: 25 },
+            { key: 'freq', width: 25 },
+            ...daysToMap.map(() => ({ width: 14 })),
+            { key: 'total', width: 10 }
         ];
 
         const headerValues = ['Member', 'Habit', 'Frequency Details', ...daysToMap.map(d => format(d, 'EEE, MMM dd')), 'Total'];
         let currentRow = 1;
 
         for (const member of activeMembers) {
-             const memberHabits = relevantHabits.filter(h => h.userId === member.id);
-             if (currentRow > 1) currentRow++;
+            const memberHabits = relevantHabits.filter(h => h.userId === member.id);
+            if (currentRow > 1) currentRow++;
 
-             const userRow = detailSheet.getRow(currentRow);
-             detailSheet.mergeCells(currentRow, 1, currentRow, headerValues.length);
-             userRow.getCell(1).value = `User: ${member.name.toUpperCase()} (${member.email || member.mobile})`;
-             userRow.getCell(1).font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
-             userRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
-             userRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
-             userRow.height = 25;
-             currentRow++;
+            const userRow = detailSheet.getRow(currentRow);
+            detailSheet.mergeCells(currentRow, 1, currentRow, headerValues.length);
+            userRow.getCell(1).value = `User: ${member.name.toUpperCase()} (${member.email || member.mobile})`;
+            userRow.getCell(1).font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
+            userRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
+            userRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
+            userRow.height = 25;
+            currentRow++;
 
-             const headerRow = detailSheet.getRow(currentRow);
-             headerRow.values = headerValues;
-             headerRow.font = { bold: true, color: { argb: 'FF374151' } };
-             headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } };
-             headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
-             headerRow.height = 30;
-             headerRow.eachCell(cell => {
+            const headerRow = detailSheet.getRow(currentRow);
+            headerRow.values = headerValues;
+            headerRow.font = { bold: true, color: { argb: 'FF374151' } };
+            headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } };
+            headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
+            headerRow.height = 30;
+            headerRow.eachCell(cell => {
                 cell.border = {
                     top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
                     left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
                     bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
                     right: { style: 'thin', color: { argb: 'FFD1D5DB' } }
                 };
-             });
-             currentRow++;
+            });
+            currentRow++;
 
-             if (memberHabits.length === 0) {
-                 const noDataRow = detailSheet.getRow(currentRow);
-                 detailSheet.mergeCells(currentRow, 1, currentRow, headerValues.length);
-                 noDataRow.getCell(1).value = "No habits found for this period.";
-                 noDataRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
-                 noDataRow.getCell(1).font = { italic: true, color: { argb: 'FF9CA3AF' } };
-                 noDataRow.height = 25;
-                 currentRow++;
-                 continue;
-             }
+            if (memberHabits.length === 0) {
+                const noDataRow = detailSheet.getRow(currentRow);
+                detailSheet.mergeCells(currentRow, 1, currentRow, headerValues.length);
+                noDataRow.getCell(1).value = "No habits found for this period.";
+                noDataRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+                noDataRow.getCell(1).font = { italic: true, color: { argb: 'FF9CA3AF' } };
+                noDataRow.height = 25;
+                currentRow++;
+                continue;
+            }
 
-             let localIndex = 0;
-             memberHabits.forEach(habit => {
+            let localIndex = 0;
+            memberHabits.forEach(habit => {
                 let freqLabel = habit.frequency.toString();
                 if (habit.frequency === HabitFrequency.WEEKLY) freqLabel = `Weekly (${habit.targetDaysPerWeek}/7)`;
                 else if (habit.frequency === HabitFrequency.INTERVAL) freqLabel = `Every ${habit.intervalDays} Days`;
@@ -1111,14 +1120,14 @@ const HabitTrackerView: React.FC<{
                     else cell.alignment = { horizontal: 'center', vertical: 'middle' };
 
                     if (colNum > 3 && colNum <= 3 + daysToMap.length) {
-                         const status = logStatuses[colNum - 4];
-                         if (status === HabitStatus.DONE) {
+                        const status = logStatuses[colNum - 4];
+                        if (status === HabitStatus.DONE) {
                             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
                             cell.font = { color: { argb: 'FF166534' }, bold: true };
-                         } else if (status === HabitStatus.NOT_DONE) {
+                        } else if (status === HabitStatus.NOT_DONE) {
                             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
                             cell.font = { color: { argb: 'FF991B1B' }, bold: true };
-                         }
+                        }
                     }
                     if (colNum === headerValues.length) {
                         cell.font = { bold: true };
@@ -1127,7 +1136,7 @@ const HabitTrackerView: React.FC<{
 
                 currentRow++;
                 localIndex++;
-             });
+            });
         }
 
         const buffer = await workbook.xlsx.writeBuffer();
@@ -1190,18 +1199,18 @@ const HabitTrackerView: React.FC<{
         const daysToScore = viewMode === 'weekly' ? weekDays : monthDays;
 
         memberHabits.forEach(h => {
-             if (h.frequency === HabitFrequency.WEEKLY) {
-                 const expected = (daysToScore.length / 7) * (h.targetDaysPerWeek || 1);
-                 const actual = Object.values(h.logs).filter(l => l.status === HabitStatus.DONE && daysToScore.find(d => format(d, 'yyyy-MM-dd') === l.date)).length;
-                 totalPoints += Math.max(1, expected);
-                 earnedPoints += Math.min(actual, expected);
-             } else {
-                 const expectedDivisor = h.frequency === HabitFrequency.INTERVAL ? (h.intervalDays || 1) : 1;
-                 const expected = daysToScore.length / expectedDivisor;
-                 const actual = Object.values(h.logs).filter(l => l.status === HabitStatus.DONE && daysToScore.find(d => format(d, 'yyyy-MM-dd') === l.date)).length;
-                 totalPoints += expected;
-                 earnedPoints += actual;
-             }
+            if (h.frequency === HabitFrequency.WEEKLY) {
+                const expected = (daysToScore.length / 7) * (h.targetDaysPerWeek || 1);
+                const actual = Object.values(h.logs).filter(l => l.status === HabitStatus.DONE && daysToScore.find(d => format(d, 'yyyy-MM-dd') === l.date)).length;
+                totalPoints += Math.max(1, expected);
+                earnedPoints += Math.min(actual, expected);
+            } else {
+                const expectedDivisor = h.frequency === HabitFrequency.INTERVAL ? (h.intervalDays || 1) : 1;
+                const expected = daysToScore.length / expectedDivisor;
+                const actual = Object.values(h.logs).filter(l => l.status === HabitStatus.DONE && daysToScore.find(d => format(d, 'yyyy-MM-dd') === l.date)).length;
+                totalPoints += expected;
+                earnedPoints += actual;
+            }
         });
         return totalPoints === 0 ? 0 : Math.round((earnedPoints / totalPoints) * 100);
     }
@@ -1234,8 +1243,8 @@ const HabitTrackerView: React.FC<{
     };
 
     const handleArchiveHabit = async (habitId: string) => {
-         await toggleHabitCompletion(habitId);
-         setIsModalOpen(false);
+        await onToggleCompletion(habitId);
+        setIsModalOpen(false);
     };
 
     const handleAddSubmit = async (e: React.FormEvent) => {
@@ -1292,7 +1301,7 @@ const HabitTrackerView: React.FC<{
                             className={`px-3 py-1 rounded-md transition-all ${viewMode === 'weekly' ? 'bg-white shadow text-indigo-600' : 'text-gray-500'}`}
                             onClick={() => setViewMode('weekly')}
                         >Weekly</button>
-                         <button
+                        <button
                             className={`px-3 py-1 rounded-md transition-all ${viewMode === 'monthly' ? 'bg-white shadow text-indigo-600' : 'text-gray-500'}`}
                             onClick={() => setViewMode('monthly')}
                         >Monthly</button>
@@ -1303,8 +1312,8 @@ const HabitTrackerView: React.FC<{
                         className={`flex items-center gap-2 ${!hideCompleted ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : ''}`}
                         title={hideCompleted ? "Show archived habits" : "Hide archived habits"}
                     >
-                         {hideCompleted ? <Icons.Archive className="w-4 h-4" /> : <Icons.ArchiveRestore className="w-4 h-4" />}
-                         {hideCompleted ? 'Show Archived' : 'Hide Archived'}
+                        {hideCompleted ? <Icons.Archive className="w-4 h-4" /> : <Icons.ArchiveRestore className="w-4 h-4" />}
+                        {hideCompleted ? 'Show Archived' : 'Hide Archived'}
                     </Button>
 
                     {isGroup && isCurrentGroupAdmin && (
@@ -1320,15 +1329,15 @@ const HabitTrackerView: React.FC<{
 
                     {isGroup && (
                         <>
-                        <Button variant="secondary" onClick={() => setChatOpen(!chatOpen)}>
-                            <Icons.MessageCircle className="w-4 h-4" />
-                        </Button>
-                        <Button variant="secondary" onClick={onOpenInvite}>
-                             <Icons.Plus className="w-4 h-4" />
-                        </Button>
-                        <Button variant="secondary" onClick={onOpenManageGroup} title="Group Members">
-                            <Icons.Settings className="w-4 h-4" />
-                        </Button>
+                            <Button variant="secondary" onClick={() => setChatOpen(!chatOpen)}>
+                                <Icons.MessageCircle className="w-4 h-4" />
+                            </Button>
+                            <Button variant="secondary" onClick={onOpenInvite}>
+                                <Icons.Plus className="w-4 h-4" />
+                            </Button>
+                            <Button variant="secondary" onClick={onOpenManageGroup} title="Group Members">
+                                <Icons.Settings className="w-4 h-4" />
+                            </Button>
                         </>
                     )}
                     <Button onClick={openAddModal}>
@@ -1372,26 +1381,26 @@ const HabitTrackerView: React.FC<{
                     )}
 
                     {activeMembers.map(member => {
-                         let memberHabits = relevantHabits.filter(h => h.userId === member?.id);
-                         const isMe = member.id === currentUser.id;
-                         const canEdit = isMe || isCurrentGroupAdmin;
+                        let memberHabits = relevantHabits.filter(h => h.userId === member?.id);
+                        const isMe = member.id === currentUser.id;
+                        const canEdit = isMe || isCurrentGroupAdmin;
 
-                         let visibleHabits = memberHabits;
-                         if (hideCompleted) {
-                             visibleHabits = memberHabits.filter(h => !h.completed);
-                         }
+                        let visibleHabits = memberHabits;
+                        if (hideCompleted) {
+                            visibleHabits = memberHabits.filter(h => !h.completed);
+                        }
 
-                         const activeHabits = visibleHabits.filter(h => !h.completed);
-                         const archivedHabits = visibleHabits.filter(h => h.completed);
+                        const activeHabits = visibleHabits.filter(h => !h.completed);
+                        const archivedHabits = visibleHabits.filter(h => h.completed);
 
-                         const habitSections = [
-                             { title: 'Active Habits', habits: activeHabits },
-                             ...( (!hideCompleted && archivedHabits.length > 0) ? [{ title: 'Archived Habits', habits: archivedHabits }] : [])
-                         ];
+                        const habitSections = [
+                            { title: 'Active Habits', habits: activeHabits },
+                            ...( (!hideCompleted && archivedHabits.length > 0) ? [{ title: 'Archived Habits', habits: archivedHabits }] : [])
+                        ];
 
-                         if (visibleHabits.length === 0 && member.id !== currentUser.id) return null;
+                        if (visibleHabits.length === 0 && member.id !== currentUser.id) return null;
 
-                         return (
+                        return (
                             <Card key={member?.id} className="p-6 overflow-x-auto">
                                 <div className="flex items-center gap-3 mb-4 sticky left-0">
                                     <img src={member?.avatar} className="w-8 h-8 rounded-full" />
@@ -1405,12 +1414,12 @@ const HabitTrackerView: React.FC<{
                                     <div className="space-y-6">
                                         {habitSections.map((section, idx) => (
                                             section.habits.length > 0 && (
-                                            <div key={idx}>
-                                                {habitSections.length > 1 && (
-                                                    <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 sticky left-0">{section.title}</h4>
-                                                )}
-                                                <table className="w-full min-w-[600px]">
-                                                    <thead>
+                                                <div key={idx}>
+                                                    {habitSections.length > 1 && (
+                                                        <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 sticky left-0">{section.title}</h4>
+                                                    )}
+                                                    <table className="w-full min-w-[600px]">
+                                                        <thead>
                                                         <tr>
                                                             <th className="text-left py-2 px-2 text-xs font-medium text-gray-500 uppercase tracking-wider w-48">Activity</th>
                                                             {viewMode === 'weekly' ? weekDays.map(d => (
@@ -1427,102 +1436,102 @@ const HabitTrackerView: React.FC<{
                                                             )}
                                                             {viewMode === 'weekly' && <th className="text-center text-xs font-medium text-gray-500">Total</th>}
                                                         </tr>
-                                                    </thead>
-                                                    <tbody className="divide-y divide-gray-100">
+                                                        </thead>
+                                                        <tbody className="divide-y divide-gray-100">
                                                         {section.habits.map(habit => {
                                                             const streak = calculateStreak(habit);
                                                             return (
-                                                            <tr key={habit.id} className={`group hover:bg-gray-50 transition-colors ${habit.completed ? 'opacity-50 grayscale' : ''}`}>
-                                                                <td className="py-3 px-2">
-                                                                    <div className="flex items-center justify-between group-hover:pr-2">
-                                                                        <div>
-                                                                            <div className={`font-medium flex items-center gap-2 ${habit.completed ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
-                                                                                {habit.title}
-                                                                                {!habit.completed && streak > 0 && (
-                                                                                    <div className="flex items-center text-xs text-orange-500 bg-orange-50 px-1.5 py-0.5 rounded-full font-bold" title={`${streak} day streak`}>
-                                                                                        <Icons.Flame className="w-3 h-3 mr-0.5 fill-orange-500" />
-                                                                                        {streak}
-                                                                                    </div>
-                                                                                )}
-                                                                            </div>
-                                                                            <div className="text-xs text-gray-500 flex items-center gap-2">
+                                                                <tr key={habit.id} className={`group hover:bg-gray-50 transition-colors ${habit.completed ? 'opacity-50 grayscale' : ''}`}>
+                                                                    <td className="py-3 px-2">
+                                                                        <div className="flex items-center justify-between group-hover:pr-2">
+                                                                            <div>
+                                                                                <div className={`font-medium flex items-center gap-2 ${habit.completed ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
+                                                                                    {habit.title}
+                                                                                    {!habit.completed && streak > 0 && (
+                                                                                        <div className="flex items-center text-xs text-orange-500 bg-orange-50 px-1.5 py-0.5 rounded-full font-bold" title={`${streak} day streak`}>
+                                                                                            <Icons.Flame className="w-3 h-3 mr-0.5 fill-orange-500" />
+                                                                                            {streak}
+                                                                                        </div>
+                                                                                    )}
+                                                                                </div>
+                                                                                <div className="text-xs text-gray-500 flex items-center gap-2">
                                                                                 <span>
                                                                                     {habit.frequency === HabitFrequency.WEEKLY ? `${habit.targetDaysPerWeek}x/Wk` :
-                                                                                    habit.frequency === HabitFrequency.INTERVAL ? `Every ${habit.intervalDays}d` :
-                                                                                    habit.frequency}
+                                                                                        habit.frequency === HabitFrequency.INTERVAL ? `Every ${habit.intervalDays}d` :
+                                                                                            habit.frequency}
                                                                                 </span>
-                                                                                {habit.durationMinutes && <span className="bg-gray-100 px-1 rounded">{habit.durationMinutes}m</span>}
+                                                                                    {habit.durationMinutes && <span className="bg-gray-100 px-1 rounded">{habit.durationMinutes}m</span>}
+                                                                                </div>
                                                                             </div>
+                                                                            {canEdit && (
+                                                                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                                    <button
+                                                                                        onClick={() => handleEditClick(habit)}
+                                                                                        className="text-gray-400 hover:text-indigo-600 transition-colors p-1 hover:bg-gray-100 rounded"
+                                                                                        title="Edit Habit"
+                                                                                    >
+                                                                                        <Icons.Edit className="w-4 h-4" />
+                                                                                    </button>
+                                                                                </div>
+                                                                            )}
                                                                         </div>
-                                                                        {canEdit && (
-                                                                            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                    </td>
+                                                                    {viewMode === 'weekly' ? weekDays.map(d => {
+                                                                        const dStr = format(d, 'yyyy-MM-dd');
+                                                                        const log = habit.logs[dStr];
+                                                                        const isDone = log?.status === HabitStatus.DONE;
+                                                                        const isMissed = log?.status === HabitStatus.NOT_DONE;
+
+                                                                        const { enabled, reason } = isHabitActionable(habit, d);
+                                                                        const isDisabled = (!enabled && !isDone && !isMissed) || habit.completed;
+
+                                                                        return (
+                                                                            <td key={dStr} className="text-center p-1">
                                                                                 <button
-                                                                                    onClick={() => handleEditClick(habit)}
-                                                                                    className="text-gray-400 hover:text-indigo-600 transition-colors p-1 hover:bg-gray-100 rounded"
-                                                                                    title="Edit Habit"
+                                                                                    disabled={isDisabled || !isMe}
+                                                                                    onClick={() => onToggleStatus(habit.id, dStr)}
+                                                                                    title={isDisabled ? (habit.completed ? 'Habit is archived' : reason) : (!isMe ? 'Only owner can mark' : '')}
+                                                                                    className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
+                                                                                        isDone ? 'bg-green-100 text-green-600 border border-green-200' :
+                                                                                            isMissed ? 'bg-red-100 text-red-600 border border-red-200' :
+                                                                                                'bg-transparent hover:bg-gray-100'
+                                                                                    } ${isDisabled ? 'opacity-30 cursor-not-allowed border-none bg-gray-50' : ''}`}
                                                                                 >
-                                                                                    <Icons.Edit className="w-4 h-4" />
+                                                                                    {isDone && <Icons.Check className="w-5 h-5" />}
+                                                                                    {isMissed && <Icons.X className="w-5 h-5" />}
+                                                                                    {!isDone && !isMissed && !isDisabled && isMe && <div className="w-2 h-2 rounded-full bg-gray-300" />}
                                                                                 </button>
+                                                                            </td>
+                                                                        );
+                                                                    }) : (
+                                                                        <td className="pl-4 py-3">
+                                                                            <div className="flex items-center gap-2">
+                                                                                <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                                                                    <div
+                                                                                        className="bg-green-500 h-2.5 rounded-full"
+                                                                                        style={{ width: `${Math.min(100, (Object.values(habit.logs).filter(l => l.status === HabitStatus.DONE).length / 30) * 100)}%` }}
+                                                                                    ></div>
+                                                                                </div>
+                                                                                <span className="text-xs text-gray-500 w-12">{Object.values(habit.logs).filter(l => l.status === HabitStatus.DONE).length} days</span>
                                                                             </div>
-                                                                        )}
-                                                                    </div>
-                                                                </td>
-                                                                {viewMode === 'weekly' ? weekDays.map(d => {
-                                                                    const dStr = format(d, 'yyyy-MM-dd');
-                                                                    const log = habit.logs[dStr];
-                                                                    const isDone = log?.status === HabitStatus.DONE;
-                                                                    const isMissed = log?.status === HabitStatus.NOT_DONE;
-
-                                                                    const { enabled, reason } = isHabitActionable(habit, d);
-                                                                    const isDisabled = (!enabled && !isDone && !isMissed) || habit.completed;
-
-                                                                    return (
-                                                                        <td key={dStr} className="text-center p-1">
-                                                                            <button
-                                                                                disabled={isDisabled || !isMe}
-                                                                                onClick={() => onToggleStatus(habit.id, dStr)}
-                                                                                title={isDisabled ? (habit.completed ? 'Habit is archived' : reason) : (!isMe ? 'Only owner can mark' : '')}
-                                                                                className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
-                                                                                    isDone ? 'bg-green-100 text-green-600 border border-green-200' : 
-                                                                                    isMissed ? 'bg-red-100 text-red-600 border border-red-200' :
-                                                                                    'bg-transparent hover:bg-gray-100'
-                                                                                } ${isDisabled ? 'opacity-30 cursor-not-allowed border-none bg-gray-50' : ''}`}
-                                                                            >
-                                                                                {isDone && <Icons.Check className="w-5 h-5" />}
-                                                                                {isMissed && <Icons.X className="w-5 h-5" />}
-                                                                                {!isDone && !isMissed && !isDisabled && isMe && <div className="w-2 h-2 rounded-full bg-gray-300" />}
-                                                                            </button>
                                                                         </td>
-                                                                    );
-                                                                }) : (
-                                                                    <td className="pl-4 py-3">
-                                                                        <div className="flex items-center gap-2">
-                                                                            <div className="w-full bg-gray-200 rounded-full h-2.5">
-                                                                                <div
-                                                                                    className="bg-green-500 h-2.5 rounded-full"
-                                                                                    style={{ width: `${Math.min(100, (Object.values(habit.logs).filter(l => l.status === HabitStatus.DONE).length / 30) * 100)}%` }}
-                                                                                ></div>
-                                                                            </div>
-                                                                            <span className="text-xs text-gray-500 w-12">{Object.values(habit.logs).filter(l => l.status === HabitStatus.DONE).length} days</span>
-                                                                        </div>
-                                                                    </td>
-                                                                )}
-                                                                {viewMode === 'weekly' && (
-                                                                    <td className="text-center text-sm font-semibold text-gray-700">
-                                                                        {Object.values(habit.logs).filter(l => l.status === HabitStatus.DONE).length}
-                                                                    </td>
-                                                                )}
-                                                            </tr>
-                                                        )})}
-                                                    </tbody>
-                                                </table>
-                                            </div>
+                                                                    )}
+                                                                    {viewMode === 'weekly' && (
+                                                                        <td className="text-center text-sm font-semibold text-gray-700">
+                                                                            {Object.values(habit.logs).filter(l => l.status === HabitStatus.DONE).length}
+                                                                        </td>
+                                                                    )}
+                                                                </tr>
+                                                            )})}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
                                             )
                                         ))}
                                     </div>
                                 )}
                             </Card>
-                         )
+                        )
                     })}
                 </div>
 
@@ -1630,7 +1639,7 @@ const HabitTrackerView: React.FC<{
                     </div>
 
                     {newHabitFreq === HabitFrequency.WEEKLY && (
-                         <Input
+                        <Input
                             label="Target Days per Week"
                             type="number"
                             min="1"
@@ -1640,7 +1649,7 @@ const HabitTrackerView: React.FC<{
                         />
                     )}
                     {newHabitFreq === HabitFrequency.INTERVAL && (
-                         <Input
+                        <Input
                             label="Every X Days (Gap)"
                             type="number"
                             min="1"
@@ -1659,7 +1668,7 @@ const HabitTrackerView: React.FC<{
                     />
 
                     <div className="flex gap-3 pt-4 border-t border-gray-100 mt-2">
-                         {editingHabit && (
+                        {editingHabit && (
                             <>
                                 <Button
                                     type="button"
@@ -1700,17 +1709,17 @@ const HabitTrackerView: React.FC<{
 }
 
 const NavItem: React.FC<{ icon: React.ReactNode, label: string, isActive: boolean, onClick: () => void }> = ({ icon, label, isActive, onClick }) => (
-  <button
-    onClick={onClick}
-    className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl transition-all ${
-      isActive 
-        ? 'bg-indigo-50 text-indigo-600 shadow-sm' 
-        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-    }`}
-  >
-    <span className={`${isActive ? 'text-indigo-600' : 'text-gray-400'}`}>{icon}</span>
-    {label}
-  </button>
+    <button
+        onClick={onClick}
+        className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl transition-all ${
+            isActive
+                ? 'bg-indigo-50 text-indigo-600 shadow-sm'
+                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+        }`}
+    >
+        <span className={`${isActive ? 'text-indigo-600' : 'text-gray-400'}`}>{icon}</span>
+        {label}
+    </button>
 );
 
 export default App;
