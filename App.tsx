@@ -7,7 +7,7 @@ import {
     Tooltip,
     ResponsiveContainer
 } from 'recharts';
-import { format, startOfWeek, addDays, isSameDay, startOfMonth, endOfMonth, eachDayOfInterval, differenceInCalendarDays, parseISO, subDays, addWeeks } from 'date-fns';
+import { format, startOfWeek, addDays, isSameDay, startOfMonth, endOfMonth, eachDayOfInterval, differenceInCalendarDays, parseISO, subDays, addWeeks, subWeeks, subMonths, isAfter, set } from 'date-fns';
 import ExcelJS from 'exceljs';
 import { generateHabitInsights } from './services/geminiService';
 import {
@@ -59,6 +59,7 @@ const App: React.FC = () => {
     const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
     const [editProfileName, setEditProfileName] = useState('');
     const [editProfileAvatar, setEditProfileAvatar] = useState('');
+    const [editProfileReminder, setEditProfileReminder] = useState('');
     const [isCreateGroupModalOpen, setIsCreateGroupModalOpen] = useState(false);
     const [newGroupName, setNewGroupName] = useState('');
     const [selectedFriendIds, setSelectedFriendIds] = useState<string[]>([]);
@@ -211,6 +212,89 @@ const App: React.FC = () => {
         }
     }, [user, groups]);
 
+    // --- SMART NOTIFICATIONS (Client-side Trigger) ---
+    useEffect(() => {
+        if (!currentUser || !habits.length) return;
+
+        const checkSmartNotifications = async () => {
+            const now = new Date();
+            const todayStr = format(now, 'yyyy-MM-dd');
+            const newNotifications: Notification[] = [];
+
+            // 1. Daily Reminder
+            if (currentUser.dailyReminderTime) {
+                const [hours, minutes] = currentUser.dailyReminderTime.split(':').map(Number);
+                const reminderTime = set(now, { hours, minutes, seconds: 0, milliseconds: 0 });
+                const reminderId = `reminder-${currentUser.id}-${todayStr}`;
+
+                if (isAfter(now, reminderTime)) {
+                    const alreadySent = notifications.some(n => n.id === reminderId);
+                    if (!alreadySent) {
+                        newNotifications.push({
+                            id: reminderId,
+                            userId: currentUser.id,
+                            message: "Time to complete your habits for today 💪",
+                            read: false,
+                            timestamp: Date.now(),
+                            type: 'info'
+                        });
+                    }
+                }
+            }
+
+            // 2. Streak Protection (After 8 PM)
+            const protectionTime = set(now, { hours: 20, minutes: 0, seconds: 0, milliseconds: 0 }); // 8:00 PM
+            if (isAfter(now, protectionTime)) {
+                // Check each habit
+                // We need to calculate streak here locally to determine risk
+                // Helper to check if habit has active streak > 0 AND not done today
+                habits.forEach(habit => {
+                    if (habit.userId !== currentUser.id || habit.completed) return; // Only my active habits
+
+                    const isDoneToday = habit.logs[todayStr]?.status === HabitStatus.DONE;
+                    if (isDoneToday) return; // Already done, no risk
+
+                    // Check if there was a streak up to yesterday
+                    let streak = 0;
+                    let current = subDays(now, 1);
+                    while (true) {
+                        const dStr = format(current, 'yyyy-MM-dd');
+                        if (habit.logs[dStr]?.status === HabitStatus.DONE) {
+                            streak++;
+                            current = subDays(current, 1);
+                        } else {
+                            break;
+                        }
+                    }
+
+                    if (streak > 0) {
+                        const alertId = `streak-risk-${habit.id}-${todayStr}`;
+                        const alreadySent = notifications.some(n => n.id === alertId);
+
+                        if (!alreadySent) {
+                             newNotifications.push({
+                                id: alertId,
+                                userId: currentUser.id,
+                                message: `⚠️ You’re about to break a ${streak}-day streak on '${habit.title}'`,
+                                read: false,
+                                timestamp: Date.now(),
+                                type: 'alert'
+                            });
+                        }
+                    }
+                });
+            }
+
+            if (newNotifications.length > 0) {
+                await createNotificationsBatch(newNotifications);
+            }
+        };
+
+        const timer = setTimeout(checkSmartNotifications, 5000); // Check 5s after load/update to avoid race conditions
+        return () => clearTimeout(timer);
+
+    }, [currentUser, habits, notifications]);
+
 
     if (loading) return <div className="p-6">Checking login...</div>;
     if (!user) return <FirebaseLogin />;
@@ -229,7 +313,12 @@ const App: React.FC = () => {
     const handleUpdateProfile = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!currentUser) return;
-        const updatedUser = { ...currentUser, name: editProfileName, avatar: editProfileAvatar };
+        const updatedUser = {
+            ...currentUser,
+            name: editProfileName,
+            avatar: editProfileAvatar,
+            dailyReminderTime: editProfileReminder || undefined
+        };
         await upsertUser(updatedUser);
         setIsProfileModalOpen(false);
     };
@@ -238,6 +327,7 @@ const App: React.FC = () => {
         if (!currentUser) return;
         setEditProfileName(currentUser.name);
         setEditProfileAvatar(currentUser.avatar);
+        setEditProfileReminder(currentUser.dailyReminderTime || '');
         setIsProfileModalOpen(true);
     };
 
@@ -644,6 +734,13 @@ const App: React.FC = () => {
                         value={editProfileAvatar}
                         onChange={e => setEditProfileAvatar(e.target.value)}
                     />
+                    <Input
+                        label="Daily Reminder Time"
+                        type="time"
+                        value={editProfileReminder}
+                        onChange={e => setEditProfileReminder(e.target.value)}
+                        placeholder="Select time"
+                    />
                     <div className="flex gap-3 pt-2">
                         <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsProfileModalOpen(false)}>Cancel</Button>
                         <Button type="submit" className="flex-1">Save Profile</Button>
@@ -794,21 +891,111 @@ const App: React.FC = () => {
 };
 
 const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], notifications: Notification[] }> = ({ user, habits, groups, notifications }) => {
-    // Calculate global stats
-    const totalLogs = habits.filter(h => h.userId === user.id).reduce((acc, h) => acc + Object.keys(h.logs).length, 0);
-    const completedLogs = habits.filter(h => h.userId === user.id).reduce((acc, h) => acc + Object.values(h.logs).filter(l => l.status === HabitStatus.DONE).length, 0);
-    const rate = totalLogs > 0 ? Math.round((completedLogs / totalLogs) * 100) : 0;
+    const myHabits = habits.filter(h => h.userId === user.id && !h.completed);
     const myNotifications = notifications.filter(n => n.userId === user.id || n.userId === 'ALL');
+
+    // Stats Calculation Helper
+    const calculateRate = (startDate: Date, endDate: Date) => {
+        let possible = 0;
+        let actual = 0;
+        const days = eachDayOfInterval({ start: startDate, end: endDate });
+
+        myHabits.forEach(h => {
+             // For simplicity in overview, assume daily potential for all (refinement: check frequency)
+             // Or better: count logs that exist in that window vs completions
+             // Given existing data structure relies on logs being created only when actioned,
+             // "Possible" is tricky. Let's use the standard "logs existing" approach for rate
+             // OR strictly check frequency. Let's stick to logs for consistency with existing rate.
+             // Wait, existing rate was All Time.
+             // Request is "Weekly Completion Percentage".
+             // If I only count logs, a lazy user has 0/0 = 0%.
+             // Better: Iterate days and check if habit SHOULD occur.
+             days.forEach(day => {
+                 const dStr = format(day, 'yyyy-MM-dd');
+                 // Simply check if log exists and is done
+                 if (h.logs[dStr]) {
+                     possible++;
+                     if (h.logs[dStr].status === HabitStatus.DONE) actual++;
+                 } else if (h.frequency === HabitFrequency.DAILY) {
+                      // If daily and no log, it's missed (simplified for overview)
+                      possible++;
+                 }
+                 // Weekly/Interval is harder to guess "possible" without complex logic.
+                 // Falling back to "Total Logs" method used in previous version but constrained to date range
+                 // to ensure we compare apples to apples.
+             });
+        });
+        // Actually, let's look at the existing implementation of "rate":
+        // const totalLogs = habits...reduce...Object.keys(h.logs).length
+        // This implies "Actioned" items.
+        // Let's stick to "Actioned" items (logs present) to determine rate for now,
+        // effectively measuring "Success Rate of Attempted Days".
+
+        let rangeLogs = 0;
+        let rangeDone = 0;
+
+        myHabits.forEach(h => {
+            Object.values(h.logs).forEach(log => {
+                 const logDate = parseISO(log.date);
+                 if (logDate >= startDate && logDate <= endDate) {
+                     rangeLogs++;
+                     if (log.status === HabitStatus.DONE) rangeDone++;
+                 }
+            });
+        });
+
+        return rangeLogs > 0 ? Math.round((rangeDone / rangeLogs) * 100) : 0;
+    };
+
+    // Trend Calculation
+    const now = new Date();
+
+    // Weekly
+    const thisWeekStart = startOfWeek(now, { weekStartsOn: 1 });
+    const thisWeekEnd = now; // up to now
+    const lastWeekStart = subWeeks(thisWeekStart, 1);
+    const lastWeekEnd = subDays(thisWeekStart, 1);
+
+    const thisWeekRate = calculateRate(thisWeekStart, thisWeekEnd);
+    const lastWeekRate = calculateRate(lastWeekStart, lastWeekEnd);
+    const weeklyDiff = thisWeekRate - lastWeekRate;
+
+    // Monthly
+    const thisMonthStart = startOfMonth(now);
+    const thisMonthEnd = now;
+    const lastMonthStart = startOfMonth(subMonths(now, 1));
+    const lastMonthEnd = endOfMonth(subMonths(now, 1));
+
+    const thisMonthRate = calculateRate(thisMonthStart, thisMonthEnd);
+    const lastMonthRate = calculateRate(lastMonthStart, lastMonthEnd);
+    const monthlyDiff = thisMonthRate - lastMonthRate;
+
+    const completedLogsAllTime = myHabits.reduce((acc, h) => acc + Object.values(h.logs).filter(l => l.status === HabitStatus.DONE).length, 0);
 
     return (
         <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <Card className="p-6 bg-gradient-to-br from-indigo-500 to-purple-600 text-white border-none">
-                    <h3 className="text-indigo-100 font-medium mb-1">Weekly Completion Rate</h3>
-                    <div className="text-4xl font-bold mb-2">{rate}%</div>
-                    <div className="text-sm text-indigo-100 flex items-center">
-                        <Icons.Activity className="w-4 h-4 mr-1" />
-                        All time stats
+                <Card className="p-6 bg-gradient-to-br from-indigo-500 to-purple-600 text-white border-none relative overflow-hidden">
+                    <div className="relative z-10">
+                        <h3 className="text-indigo-100 font-medium mb-1">Weekly Completion</h3>
+                        <div className="flex items-end gap-3 mb-2">
+                            <span className="text-4xl font-bold">{thisWeekRate}%</span>
+                            <span className={`text-sm font-bold mb-1 ${weeklyDiff >= 0 ? 'text-green-300' : 'text-red-300'}`}>
+                                {weeklyDiff >= 0 ? '▲' : '▼'} {Math.abs(weeklyDiff)}%
+                            </span>
+                        </div>
+                        <div className="text-xs text-indigo-200">vs last week ({lastWeekRate}%)</div>
+
+                        <div className="mt-4 pt-4 border-t border-indigo-400/30">
+                            <h3 className="text-indigo-100 font-medium mb-1 text-sm">Monthly Trend</h3>
+                             <div className="flex items-center gap-2">
+                                <span className="text-xl font-bold">{thisMonthRate}%</span>
+                                <span className={`text-xs font-bold ${monthlyDiff >= 0 ? 'text-green-300' : 'text-red-300'}`}>
+                                    {monthlyDiff >= 0 ? '▲' : '▼'} {Math.abs(monthlyDiff)}%
+                                </span>
+                             </div>
+                             <div className="text-xs text-indigo-200">vs last month</div>
+                        </div>
                     </div>
                 </Card>
                 <Card className="p-6">
@@ -818,7 +1005,7 @@ const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], no
                 </Card>
                 <Card className="p-6">
                     <h3 className="text-gray-500 font-medium mb-1">Total Completions</h3>
-                    <div className="text-4xl font-bold text-gray-800 mb-2">{completedLogs}</div>
+                    <div className="text-4xl font-bold text-gray-800 mb-2">{completedLogsAllTime}</div>
                     <div className="text-sm text-gray-400">Keep up the streak!</div>
                 </Card>
             </div>
@@ -1215,6 +1402,39 @@ const HabitTrackerView: React.FC<{
         return totalPoints === 0 ? 0 : Math.round((earnedPoints / totalPoints) * 100);
     }
 
+    const getBestStreak = (memberId: string) => {
+        const memberHabits = relevantHabits.filter(h => h.userId === memberId && !h.completed);
+        let maxStreak = 0;
+        let bestHabitName = '';
+
+        const now = new Date();
+        const todayStr = format(now, 'yyyy-MM-dd');
+
+        memberHabits.forEach(h => {
+            let streak = 0;
+            const isDoneToday = h.logs[todayStr]?.status === HabitStatus.DONE;
+            if (isDoneToday) streak++;
+
+            let current = subDays(now, 1);
+            while (true) {
+                const dStr = format(current, 'yyyy-MM-dd');
+                if (h.logs[dStr]?.status === HabitStatus.DONE) {
+                    streak++;
+                    current = subDays(current, 1);
+                } else {
+                    break;
+                }
+            }
+
+            if (streak > maxStreak) {
+                maxStreak = streak;
+                bestHabitName = h.title;
+            }
+        });
+
+        return { streak: maxStreak, habitName: bestHabitName };
+    }
+
     const openAddModal = () => {
         setEditingHabit(null);
         setNewHabitTitle('');
@@ -1355,23 +1575,31 @@ const HabitTrackerView: React.FC<{
                             <div className="flex flex-wrap gap-4">
                                 {activeMembers.map(m => {
                                     const score = getGroupStats(m.id);
+                                    const { streak, habitName } = getBestStreak(m.id);
                                     const isAdmin = currentGroupObj?.admins?.includes(m.id);
                                     return (
-                                        <div key={m.id} className="flex items-center gap-3 bg-gray-50 px-3 py-2 rounded-lg border border-gray-100">
-                                            <div className="relative">
+                                        <div key={m.id} className="flex items-start gap-3 bg-gray-50 px-3 py-3 rounded-lg border border-gray-100 min-w-[200px]">
+                                            <div className="relative shrink-0">
                                                 <img src={m.avatar} className="w-10 h-10 rounded-full" />
                                                 <div className="absolute -bottom-1 -right-1 bg-indigo-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
                                                     {score}%
                                                 </div>
                                             </div>
-                                            <div>
+                                            <div className="flex-1">
                                                 <p className="text-sm font-medium text-gray-900 flex items-center gap-1">
                                                     {m.name}
                                                     {isAdmin && <Icons.ShieldCheck className="w-3 h-3 text-indigo-500" />}
                                                 </p>
-                                                <div className="w-20 bg-gray-200 rounded-full h-1.5 mt-1">
+                                                <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1 mb-2">
                                                     <div className="bg-indigo-500 h-1.5 rounded-full" style={{ width: `${score}%` }}></div>
                                                 </div>
+                                                {streak > 0 && (
+                                                    <div className="text-xs text-orange-600 flex items-center gap-1 bg-orange-50 px-2 py-1 rounded-md border border-orange-100">
+                                                        <Icons.Flame className="w-3 h-3 fill-orange-500" />
+                                                        <span className="font-bold">{streak} days</span>
+                                                        <span className="truncate max-w-[80px] text-gray-500" title={habitName}>({habitName})</span>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     )
