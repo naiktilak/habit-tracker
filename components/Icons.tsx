@@ -33,7 +33,9 @@ import {
   Download,
   Flame,
   Archive,
-  ArchiveRestore
+  ArchiveRestore,
+  Key,
+  Mail
 } from 'lucide-react';
 
 export const Icons = {
@@ -70,5 +72,7 @@ export const Icons = {
   Download,
   Flame,
   Archive,
-  ArchiveRestore
+  ArchiveRestore,
+  Key,
+  Mail
 };
