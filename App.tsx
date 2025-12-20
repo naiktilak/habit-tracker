@@ -41,12 +41,16 @@ const App: React.FC = () => {
     // Data State (Synced via Listeners)
     const [users, setUsers] = useState<User[]>([]);
     const [groups, setGroups] = useState<Group[]>([]);
-    const [habitsMap, setHabitsMap] = useState<Record<string, Habit>>({});
+    const [myHabitsMap, setMyHabitsMap] = useState<Record<string, Habit>>({});
+    const [groupHabitsMap, setGroupHabitsMap] = useState<Record<string, Habit>>({});
     const [messagesMap, setMessagesMap] = useState<Record<string, ChatMessage>>({});
     const [notifications, setNotifications] = useState<Notification[]>([]);
 
     // Derived State
-    const habits = useMemo(() => Object.values(habitsMap), [habitsMap]);
+    const habits = useMemo(() => {
+        const merged = { ...myHabitsMap, ...groupHabitsMap };
+        return Object.values(merged);
+    }, [myHabitsMap, groupHabitsMap]);
     const messages = useMemo(() => Object.values(messagesMap).sort((a,b) => a.timestamp - b.timestamp), [messagesMap]);
 
     // UI State
@@ -120,27 +124,42 @@ const App: React.FC = () => {
         };
     }, [user]);
 
-    // --- SECONDARY LISTENERS (Habits & Messages) ---
-    // Dependent on Groups to know which group data to fetch
+    // --- SECONDARY LISTENERS (My Habits) ---
     useEffect(() => {
         if (!user) return;
 
-        // Reset maps when user changes, but we want to merge group updates.
-        // Actually, we should probably clear when groups change drastically, but let's just keep adding/updating.
-        // To be safe, we can rebuild listeners.
-
         const myId = user.uid;
-        const groupIds = groups.map(g => g.id);
 
         // Listener A: My Personal Habits & My Contributions
         const unsubMyHabits = onSnapshot(query(collection(db, "habits"), where("userId", "==", myId)), (snap) => {
-            const updates: Record<string, Habit> = {};
-            snap.docs.forEach(d => { updates[d.id] = d.data() as Habit; });
-            setHabitsMap(prev => ({ ...prev, ...updates }));
+            setMyHabitsMap(prev => {
+                const next = { ...prev };
+                snap.docChanges().forEach(change => {
+                    if (change.type === 'added' || change.type === 'modified') {
+                         next[change.doc.id] = change.doc.data() as Habit;
+                    } else if (change.type === 'removed') {
+                         delete next[change.doc.id];
+                    }
+                });
+                return next;
+            });
         });
 
-        // Listener B: Habits of my Groups (limit 10 for 'in' clause)
-        // We only listen if we have groups.
+        return () => {
+            unsubMyHabits();
+        };
+    }, [user]);
+
+    // --- TERTIARY LISTENERS (Group Habits & Messages) ---
+    useEffect(() => {
+        if (!user) return;
+
+        const groupIds = groups.map(g => g.id);
+
+        // Reset group maps when groups change to avoid stale data from groups we left
+        setGroupHabitsMap({});
+        setMessagesMap({});
+
         let unsubGroupHabits = () => {};
         let unsubGroupMessages = () => {};
 
@@ -149,24 +168,39 @@ const App: React.FC = () => {
             const slicedGroups = groupIds.slice(0, 10);
 
             unsubGroupHabits = onSnapshot(query(collection(db, "habits"), where("groupId", "in", slicedGroups)), (snap) => {
-                 const updates: Record<string, Habit> = {};
-                 snap.docs.forEach(d => { updates[d.id] = d.data() as Habit; });
-                 setHabitsMap(prev => ({ ...prev, ...updates }));
+                 setGroupHabitsMap(prev => {
+                    const next = { ...prev };
+                    snap.docChanges().forEach(change => {
+                        if (change.type === 'added' || change.type === 'modified') {
+                             next[change.doc.id] = change.doc.data() as Habit;
+                        } else if (change.type === 'removed') {
+                             delete next[change.doc.id];
+                        }
+                    });
+                    return next;
+                });
             });
 
             unsubGroupMessages = onSnapshot(query(collection(db, "messages"), where("groupId", "in", slicedGroups)), (snap) => {
-                 const updates: Record<string, ChatMessage> = {};
-                 snap.docs.forEach(d => { updates[d.id] = d.data() as ChatMessage; });
-                 setMessagesMap(prev => ({ ...prev, ...updates }));
+                 setMessagesMap(prev => {
+                    const next = { ...prev };
+                    snap.docChanges().forEach(change => {
+                        if (change.type === 'added' || change.type === 'modified') {
+                             next[change.doc.id] = change.doc.data() as ChatMessage;
+                        } else if (change.type === 'removed') {
+                             delete next[change.doc.id];
+                        }
+                    });
+                    return next;
+                });
             });
         }
 
         return () => {
-            unsubMyHabits();
             unsubGroupHabits();
             unsubGroupMessages();
         }
-    }, [user, groups]); // Re-run when groups list changes to update subscriptions
+    }, [user, groups]);
 
 
     if (loading) return <div className="p-6">Checking login...</div>;
@@ -178,7 +212,8 @@ const App: React.FC = () => {
     const handleLogout = async () => {
         await logout();
         setActiveGroupId(null);
-        setHabitsMap({});
+        setMyHabitsMap({});
+        setGroupHabitsMap({});
         setMessagesMap({});
     };
 
