@@ -128,6 +128,9 @@ const App: React.FC = () => {
     useEffect(() => {
         if (!user) return;
 
+        // Reset state to prevent stale data if user changes
+        setMyHabitsMap({});
+
         const myId = user.uid;
 
         // Listener A: My Personal Habits & My Contributions
@@ -171,8 +174,14 @@ const App: React.FC = () => {
                  setGroupHabitsMap(prev => {
                     const next = { ...prev };
                     snap.docChanges().forEach(change => {
+                        const habit = change.doc.data() as Habit;
+
+                        // IMPORTANT: Skip my own habits here. They are handled by 'myHabitsMap' listener.
+                        // This prevents race conditions where stale group data overwrites my local updates (e.g., Archive).
+                        if (habit.userId === user.uid) return;
+
                         if (change.type === 'added' || change.type === 'modified') {
-                             next[change.doc.id] = change.doc.data() as Habit;
+                             next[change.doc.id] = habit;
                         } else if (change.type === 'removed') {
                              delete next[change.doc.id];
                         }
@@ -311,7 +320,7 @@ const App: React.FC = () => {
             durationMinutes: habitData.durationMinutes,
             targetDaysPerWeek: habitData.targetDaysPerWeek,
             intervalDays: habitData.intervalDays,
-            groupId: habitData.groupId,
+            groupId: habitData.groupId || null, // Ensure explicit null for personal habits
             logs: {},
             completed: false,
             createdAt: Date.now()
@@ -1234,7 +1243,7 @@ const HabitTrackerView: React.FC<{
     };
 
     const handleArchiveHabit = async (habitId: string) => {
-         await toggleHabitCompletion(habitId);
+         await onToggleCompletion(habitId);
          setIsModalOpen(false);
     };
 
