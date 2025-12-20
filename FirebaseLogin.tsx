@@ -3,7 +3,9 @@ import {
     GoogleAuthProvider,
     signInWithPopup,
     createUserWithEmailAndPassword,
-    signInWithEmailAndPassword
+    signInWithEmailAndPassword,
+    sendPasswordResetEmail,
+    sendEmailVerification
 } from "firebase/auth";
 import { auth } from "./services/firebaseService";
 import { Button, Input } from "./components/UI";
@@ -13,7 +15,9 @@ const FirebaseLogin = () => {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [isSignup, setIsSignup] = useState(false);
+    const [showForgotPassword, setShowForgotPassword] = useState(false);
     const [error, setError] = useState("");
+    const [successMessage, setSuccessMessage] = useState("");
     const [loading, setLoading] = useState(false);
 
     const handleGoogleLogin = async () => {
@@ -30,11 +34,13 @@ const FirebaseLogin = () => {
     const handleEmailAuth = async (e: React.FormEvent) => {
         e.preventDefault();
         setError("");
+        setSuccessMessage("");
         setLoading(true);
 
         try {
             if (isSignup) {
-                await createUserWithEmailAndPassword(auth, email, password);
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                await sendEmailVerification(userCredential.user);
             } else {
                 await signInWithEmailAndPassword(auth, email, password);
             }
@@ -55,6 +61,78 @@ const FirebaseLogin = () => {
             setLoading(false);
         }
     };
+
+    const handleResetPassword = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError("");
+        setSuccessMessage("");
+        setLoading(true);
+
+        try {
+            await sendPasswordResetEmail(auth, email);
+            setSuccessMessage("Password reset email sent! Check your inbox.");
+        } catch (err: any) {
+            console.error(err);
+            setError(err.message || "Failed to send reset email");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    if (showForgotPassword) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-50">
+                <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md text-center">
+                    <div className="mb-6">
+                        <Icons.Key className="w-10 h-10 text-indigo-600 mx-auto" />
+                        <h1 className="text-2xl font-bold mt-4">Reset Password</h1>
+                        <p className="text-gray-500 mt-1">Enter your email to receive a reset link</p>
+                    </div>
+
+                    <form onSubmit={handleResetPassword} className="text-left mb-6">
+                        <Input
+                            label="Email"
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            required
+                            placeholder="you@example.com"
+                        />
+
+                        {error && (
+                            <div className="text-red-500 text-sm mb-4 bg-red-50 p-2 rounded">
+                                {error}
+                            </div>
+                        )}
+                        {successMessage && (
+                            <div className="text-green-600 text-sm mb-4 bg-green-50 p-2 rounded">
+                                {successMessage}
+                            </div>
+                        )}
+
+                        <Button
+                            type="submit"
+                            className="w-full py-3"
+                            disabled={loading}
+                        >
+                            {loading ? "Sending..." : "Send Reset Link"}
+                        </Button>
+                    </form>
+
+                    <button
+                        onClick={() => {
+                            setShowForgotPassword(false);
+                            setError("");
+                            setSuccessMessage("");
+                        }}
+                        className="text-gray-500 hover:text-gray-700 text-sm font-medium"
+                    >
+                        ← Back to Login
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -84,6 +162,17 @@ const FirebaseLogin = () => {
                         required
                         placeholder="••••••••"
                     />
+                    {!isSignup && (
+                        <div className="text-right -mt-3 mb-4">
+                            <button
+                                type="button"
+                                onClick={() => setShowForgotPassword(true)}
+                                className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+                            >
+                                Forgot Password?
+                            </button>
+                        </div>
+                    )}
 
                     {error && (
                         <div className="text-red-500 text-sm mb-4 bg-red-50 p-2 rounded">

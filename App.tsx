@@ -29,6 +29,7 @@ import { Icons } from './components/Icons';
 import { Button, Input, Card, Modal } from './components/UI';
 import { useAuth } from "./AuthContext";
 import FirebaseLogin from "./FirebaseLogin";
+import { EmailVerification } from "./EmailVerification";
 
 // --- MAIN APP ---
 
@@ -298,6 +299,12 @@ const App: React.FC = () => {
 
     if (loading) return <div className="p-6">Checking login...</div>;
     if (!user) return <FirebaseLogin />;
+
+    const isGoogleUser = user.providerData.some(p => p.providerId === 'google.com');
+    if (!user.emailVerified && !isGoogleUser) {
+        return <EmailVerification user={user} />;
+    }
+
     if (!currentUser) return <div className="p-6 flex items-center justify-center h-screen"><Icons.Activity className="w-8 h-8 animate-spin text-indigo-600" /></div>;
 
     // --- ACTIONS ---
