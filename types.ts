@@ -18,6 +18,7 @@ export interface User {
   email?: string;
   mobile?: string; // +91 format
   avatar: string;
+  dailyReminderTime?: string; // HH:mm format, e.g. "09:00"
 }
 
 export interface Log {
