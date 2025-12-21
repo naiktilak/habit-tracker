@@ -58,7 +58,7 @@ const App: React.FC = () => {
         const merged = { ...myHabitsMap, ...groupHabitsMap };
         return Object.values(merged);
     }, [myHabitsMap, groupHabitsMap]);
-    const messages = useMemo(() => Object.values(messagesMap).sort((a,b) => a.timestamp - b.timestamp), [messagesMap]);
+    const messages = useMemo(() => Object.values(messagesMap).sort((a: ChatMessage, b: ChatMessage) => a.timestamp - b.timestamp), [messagesMap]);
 
     // UI State
     const [isWelcomeModalOpen, setIsWelcomeModalOpen] = useState(false);
@@ -1317,7 +1317,7 @@ const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], no
     const lastMonthRate = calculateRate(lastMonthStart, lastMonthEnd);
     const monthlyDiff = thisMonthRate - lastMonthRate;
 
-    const completedLogsAllTime = myHabits.reduce((acc, h) => acc + Object.values(h.logs).filter(l => l.status === HabitStatus.DONE).length, 0);
+    const completedLogsAllTime = myHabits.reduce((acc, h) => acc + Object.values(h.logs).filter((l: Log) => l.status === HabitStatus.DONE).length, 0);
 
     return (
         <div className="space-y-6">
@@ -1416,8 +1416,8 @@ const NotificationsView: React.FC<{
                                     <p className="text-xs text-gray-500 mt-1">From a friend</p>
                                 </div>
                                 <div className="flex gap-2">
-                                    <Button size="sm" variant="secondary" onClick={() => onRejectRequest(req)}>Reject</Button>
-                                    <Button size="sm" onClick={() => onAcceptRequest(req)}>Accept</Button>
+                                    <Button className="px-2 py-1 text-sm" variant="secondary" onClick={() => onRejectRequest(req)}>Reject</Button>
+                                    <Button className="px-2 py-1 text-sm" onClick={() => onAcceptRequest(req)}>Accept</Button>
                                 </div>
                             </div>
                         ))}
@@ -1763,13 +1763,13 @@ const HabitTrackerView: React.FC<{
         memberHabits.forEach(h => {
             if (h.frequency === HabitFrequency.WEEKLY) {
                 const expected = (daysToScore.length / 7) * (h.targetDaysPerWeek || 1);
-                const actual = Object.values(h.logs).filter(l => l.status === HabitStatus.DONE && daysToScore.find(d => format(d, 'yyyy-MM-dd') === l.date)).length;
+                const actual = Object.values(h.logs).filter((l: Log) => l.status === HabitStatus.DONE && daysToScore.find(d => format(d, 'yyyy-MM-dd') === l.date)).length;
                 totalPoints += Math.max(1, expected);
                 earnedPoints += Math.min(actual, expected);
             } else {
                 const expectedDivisor = h.frequency === HabitFrequency.INTERVAL ? (h.intervalDays || 1) : 1;
                 const expected = daysToScore.length / expectedDivisor;
-                const actual = Object.values(h.logs).filter(l => l.status === HabitStatus.DONE && daysToScore.find(d => format(d, 'yyyy-MM-dd') === l.date)).length;
+                const actual = Object.values(h.logs).filter((l: Log) => l.status === HabitStatus.DONE && daysToScore.find(d => format(d, 'yyyy-MM-dd') === l.date)).length;
                 totalPoints += expected;
                 earnedPoints += actual;
             }
@@ -2112,16 +2112,16 @@ const HabitTrackerView: React.FC<{
                                                                                 <div className="w-full bg-gray-200 rounded-full h-2.5">
                                                                                     <div
                                                                                         className="bg-green-500 h-2.5 rounded-full"
-                                                                                        style={{ width: `${Math.min(100, (Object.values(habit.logs).filter(l => l.status === HabitStatus.DONE).length / 30) * 100)}%` }}
+                                                                                        style={{ width: `${Math.min(100, (Object.values(habit.logs).filter((l: Log) => l.status === HabitStatus.DONE).length / 30) * 100)}%` }}
                                                                                     ></div>
                                                                                 </div>
-                                                                                <span className="text-xs text-gray-500 w-12">{Object.values(habit.logs).filter(l => l.status === HabitStatus.DONE).length} days</span>
+                                                                                <span className="text-xs text-gray-500 w-12">{Object.values(habit.logs).filter((l: Log) => l.status === HabitStatus.DONE).length} days</span>
                                                                             </div>
                                                                         </td>
                                                                     )}
                                                                     {viewMode === 'weekly' && (
                                                                         <td className="text-center text-sm font-semibold text-gray-700">
-                                                                            {Object.values(habit.logs).filter(l => l.status === HabitStatus.DONE).length}
+                                                                            {Object.values(habit.logs).filter((l: Log) => l.status === HabitStatus.DONE).length}
                                                                         </td>
                                                                     )}
                                                                 </tr>
