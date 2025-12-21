@@ -27,7 +27,7 @@ import {
     createAchievementsBatch
 } from './services/firebaseService';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs } from 'firebase/firestore';
-import { User, Group, Habit, HabitStatus, HabitFrequency, ChatMessage, Notification, GroupJoinRequest, JoinRequestStatus, Achievement } from './types';
+import { User, Group, Habit, HabitStatus, HabitFrequency, ChatMessage, Notification, GroupJoinRequest, JoinRequestStatus, Achievement, Log } from './types';
 import { MOTIVATIONAL_QUOTES } from './constants';
 import { Icons } from './components/Icons';
 import { Button, Input, Card, Modal } from './components/UI';
@@ -1282,7 +1282,7 @@ const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], no
         let rangeDone = 0;
 
         myHabits.forEach(h => {
-            Object.values(h.logs).forEach(log => {
+            Object.values(h.logs).forEach((log: Log) => {
                  const logDate = parseISO(log.date);
                  if (logDate >= startDate && logDate <= endDate) {
                      rangeLogs++;
