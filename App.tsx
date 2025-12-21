@@ -1493,7 +1493,12 @@ const HabitTrackerView: React.FC<{
 
     const currentGroupObj = groups.find(g => g.id === activeGroupId);
     const activeMembers = isGroup && currentGroupObj
-        ? currentGroupObj.members.map(mid => users.find(u => u.id === mid)).filter(u => u !== undefined) as User[]
+        ? (currentGroupObj.members.map(mid => users.find(u => u.id === mid)).filter(u => u !== undefined) as User[])
+            .sort((a, b) => {
+                if (a.id === currentUser.id) return -1;
+                if (b.id === currentUser.id) return 1;
+                return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+            })
         : [currentUser];
 
     const isCurrentGroupAdmin = isGroup && currentGroupObj && (currentGroupObj.admins || []).includes(currentUser.id);
