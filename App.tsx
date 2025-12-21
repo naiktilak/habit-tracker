@@ -20,10 +20,13 @@ import {
     deleteHabit,
     createMessage,
     createNotificationsBatch,
-    markNotificationsReadBatch
+    markNotificationsReadBatch,
+    createJoinRequestsBatch,
+    createJoinRequest,
+    updateJoinRequest
 } from './services/firebaseService';
-import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/firestore';
-import { User, Group, Habit, HabitStatus, HabitFrequency, ChatMessage, Notification } from './types';
+import { collection, query, where, onSnapshot, doc, getDoc, getDocs } from 'firebase/firestore';
+import { User, Group, Habit, HabitStatus, HabitFrequency, ChatMessage, Notification, GroupJoinRequest, JoinRequestStatus } from './types';
 import { MOTIVATIONAL_QUOTES } from './constants';
 import { Icons } from './components/Icons';
 import { Button, Input, Card, Modal } from './components/UI';
@@ -46,6 +49,7 @@ const App: React.FC = () => {
     const [groupHabitsMap, setGroupHabitsMap] = useState<Record<string, Habit>>({});
     const [messagesMap, setMessagesMap] = useState<Record<string, ChatMessage>>({});
     const [notifications, setNotifications] = useState<Notification[]>([]);
+    const [joinRequests, setJoinRequests] = useState<GroupJoinRequest[]>([]);
 
     // Derived State
     const habits = useMemo(() => {
@@ -115,6 +119,11 @@ const App: React.FC = () => {
             setNotifications(snap.docs.map(d => d.data() as Notification));
         });
 
+        // 5. Listen to Pending Join Requests
+        const unsubRequests = onSnapshot(query(collection(db, "groupJoinRequests"), where("requestedUserId", "==", user.uid), where("status", "==", "PENDING")), (snap) => {
+            setJoinRequests(snap.docs.map(d => d.data() as GroupJoinRequest));
+        });
+
         // Show Quote on load
         setWelcomeQuote(MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)]);
         setIsWelcomeModalOpen(true);
@@ -123,6 +132,7 @@ const App: React.FC = () => {
             unsubUsers();
             unsubGroups();
             unsubNotifs();
+            unsubRequests();
         };
     }, [user]);
 
@@ -444,12 +454,37 @@ const App: React.FC = () => {
         const newGroup: Group = {
             id: `g${Date.now()}`,
             name: newGroupName,
-            members: [currentUser.id, ...selectedFriendIds],
+            members: [currentUser.id],
             admins: [currentUser.id],
             inviteCode: Math.random().toString(36).substring(2, 8).toUpperCase()
         };
 
         await createGroup(newGroup);
+
+        if (selectedFriendIds.length > 0) {
+            const newRequests: GroupJoinRequest[] = selectedFriendIds.map(friendId => ({
+                id: `req-${newGroup.id}-${friendId}`,
+                groupId: newGroup.id,
+                groupName: newGroup.name,
+                requestedByUserId: currentUser.id,
+                requestedUserId: friendId,
+                status: 'PENDING',
+                createdAt: Date.now()
+            }));
+
+            await createJoinRequestsBatch(newRequests);
+
+            const newNotifs: Notification[] = selectedFriendIds.map(friendId => ({
+                id: `n${Date.now()}-${friendId}`,
+                userId: friendId,
+                message: `You’ve been invited to join the group ${newGroup.name} by ${currentUser.name}`,
+                read: false,
+                timestamp: Date.now(),
+                type: 'info'
+            }));
+
+            await createNotificationsBatch(newNotifs);
+        }
 
         setIsCreateGroupModalOpen(false);
         setNewGroupName('');
@@ -471,15 +506,54 @@ const App: React.FC = () => {
 
     const handleInviteMember = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!activeGroupId || !inviteEmail.trim() || !inviteEmail.includes('@')) return;
+        if (!activeGroupId || !inviteEmail.trim() || !inviteEmail.includes('@') || !currentUser) return;
 
         const user = await ensureUserByEmail(inviteEmail.trim());
         const group = groups.find(g => g.id === activeGroupId);
         if (group && !group.members.includes(user.id)) {
-            await updateGroup(activeGroupId, { members: [...group.members, user.id] });
+
+            // Check for existing pending request
+            const existingReqQuery = query(
+                collection(db, "groupJoinRequests"),
+                where("groupId", "==", group.id),
+                where("requestedUserId", "==", user.id),
+                where("status", "==", "PENDING")
+            );
+            const existingSnap = await getDocs(existingReqQuery); // Need to import getDocs
+
+            if (!existingSnap.empty) {
+                alert(`An invitation is already pending for ${user.name}.`);
+                return;
+            }
+
+            // Create Join Request
+            const newRequest: GroupJoinRequest = {
+                id: `req-${group.id}-${user.id}`,
+                groupId: group.id,
+                groupName: group.name,
+                requestedByUserId: currentUser.id,
+                requestedUserId: user.id,
+                status: 'PENDING',
+                createdAt: Date.now()
+            };
+            await createJoinRequest(newRequest);
+
+            // Notify User
+            const newNotif: Notification = {
+                id: `n${Date.now()}-${user.id}`,
+                userId: user.id,
+                message: `You’ve been invited to join the group ${group.name} by ${currentUser.name}`,
+                read: false,
+                timestamp: Date.now(),
+                type: 'info'
+            };
+            await createNotificationsBatch([newNotif]);
+
             setIsInviteModalOpen(false);
             setInviteEmail('');
-            alert(`${user.name} added to the group!`);
+            alert(`Invitation sent to ${user.name}!`);
+        } else if (group && group.members.includes(user.id)) {
+            alert("User is already a member of this group.");
         }
     };
 
@@ -517,7 +591,40 @@ const App: React.FC = () => {
                 members: group.members.filter(m => m !== userId),
                 admins: (group.admins || []).filter(a => a !== userId)
             });
+
+            // Notify Removed Member
+            const newNotif: Notification = {
+                id: `n${Date.now()}-${userId}`,
+                userId: userId,
+                message: `You were removed from the group ${group.name}`,
+                read: false,
+                timestamp: Date.now(),
+                type: 'alert'
+            };
+            await createNotificationsBatch([newNotif]);
         }
+    };
+
+    const handleLeaveGroup = async () => {
+        if (!activeGroupId || !currentUser) return;
+        const group = groups.find(g => g.id === activeGroupId);
+        if (!group) return;
+
+        // Check Admin Constraint
+        if (group.admins.includes(currentUser.id) && group.admins.length === 1) {
+            alert("You must promote another admin before leaving the group.");
+            return;
+        }
+
+        if (!window.confirm("Are you sure you want to leave this group?")) return;
+
+        await updateGroup(activeGroupId, {
+            members: group.members.filter(m => m !== currentUser.id),
+            admins: group.admins.filter(a => a !== currentUser.id)
+        });
+
+        setActiveGroupId(null);
+        setCurrentView('dashboard');
     };
 
     const markNotificationsRead = async () => {
@@ -526,6 +633,55 @@ const App: React.FC = () => {
         if (unreadIds.length > 0) {
             await markNotificationsReadBatch(currentUser.id, unreadIds);
         }
+    };
+
+    const handleAcceptJoinRequest = async (request: GroupJoinRequest) => {
+        if (!currentUser) return;
+
+        // 1. Update Request Status
+        await updateJoinRequest(request.id, { status: 'APPROVED' });
+
+        // 2. Add to Group
+        // Note: We cannot use local 'groups' state here because it only contains groups we are ALREADY a member of.
+        // We must fetch the group document directly.
+        const groupRef = doc(db, "groups", request.groupId);
+        const groupSnap = await getDoc(groupRef);
+
+        if (groupSnap.exists()) {
+            const groupData = groupSnap.data() as Group;
+            if (!groupData.members.includes(currentUser.id)) {
+                 await updateGroup(request.groupId, { members: [...groupData.members, currentUser.id] });
+            }
+        }
+
+        // 3. Notify Requester
+        const newNotif: Notification = {
+            id: `n${Date.now()}-${request.requestedByUserId}`,
+            userId: request.requestedByUserId,
+            message: `${currentUser.name} accepted your request to join ${request.groupName}`,
+            read: false,
+            timestamp: Date.now(),
+            type: 'success'
+        };
+        await createNotificationsBatch([newNotif]);
+    };
+
+    const handleRejectJoinRequest = async (request: GroupJoinRequest) => {
+        if (!currentUser) return;
+
+        // 1. Update Request Status
+        await updateJoinRequest(request.id, { status: 'REJECTED' });
+
+        // 2. Notify Requester
+        const newNotif: Notification = {
+            id: `n${Date.now()}-${request.requestedByUserId}`,
+            userId: request.requestedByUserId,
+            message: `${currentUser.name} rejected your request to join ${request.groupName}`,
+            read: false,
+            timestamp: Date.now(),
+            type: 'alert'
+        };
+        await createNotificationsBatch([newNotif]);
     };
 
     // --- VIEW LOGIC REMAINS MOSTLY UNCHANGED ---
@@ -673,7 +829,10 @@ const App: React.FC = () => {
                     {currentView === 'notifications' && (
                         <NotificationsView
                             notifications={notifications}
+                            joinRequests={joinRequests}
                             user={currentUser!}
+                            onAcceptRequest={handleAcceptJoinRequest}
+                            onRejectRequest={handleRejectJoinRequest}
                         />
                     )}
                     {(currentView === 'personal' || currentView === 'group') && (
@@ -889,7 +1048,18 @@ const App: React.FC = () => {
                             )
                         })}
                     </div>
-                    <Button variant="secondary" className="w-full" onClick={() => setIsManageGroupModalOpen(false)}>Close</Button>
+
+                    <div className="pt-4 border-t border-gray-100 flex gap-3">
+                        <Button
+                            variant="danger"
+                            className="flex-1 bg-red-50 text-red-600 hover:bg-red-100 border-red-200"
+                            onClick={handleLeaveGroup}
+                        >
+                            <Icons.LogOut className="w-4 h-4 mr-2 inline" />
+                            Leave Group
+                        </Button>
+                        <Button variant="secondary" className="flex-1" onClick={() => setIsManageGroupModalOpen(false)}>Close</Button>
+                    </div>
                 </div>
             </Modal>
 
@@ -1049,7 +1219,13 @@ const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], no
     );
 };
 
-const NotificationsView: React.FC<{ notifications: Notification[], user: User }> = ({ notifications, user }) => {
+const NotificationsView: React.FC<{
+    notifications: Notification[],
+    joinRequests: GroupJoinRequest[],
+    user: User,
+    onAcceptRequest: (req: GroupJoinRequest) => void,
+    onRejectRequest: (req: GroupJoinRequest) => void
+}> = ({ notifications, joinRequests, user, onAcceptRequest, onRejectRequest }) => {
     const myNotifications = notifications.filter(n => n.userId === user.id || n.userId === 'ALL').sort((a,b) => b.timestamp - a.timestamp);
 
     return (
@@ -1058,7 +1234,29 @@ const NotificationsView: React.FC<{ notifications: Notification[], user: User }>
                 <Icons.Bell className="w-6 h-6 text-indigo-600" />
                 Notifications
             </h2>
+
+            {joinRequests.length > 0 && (
+                <div className="mb-8">
+                    <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Group Invites</h3>
+                    <div className="space-y-3">
+                        {joinRequests.map(req => (
+                            <div key={req.id} className="p-4 rounded-xl bg-gradient-to-r from-indigo-50 to-white border border-indigo-100 flex items-center justify-between">
+                                <div>
+                                    <p className="font-medium text-gray-900">Invite to <strong>{req.groupName}</strong></p>
+                                    <p className="text-xs text-gray-500 mt-1">From a friend</p>
+                                </div>
+                                <div className="flex gap-2">
+                                    <Button size="sm" variant="secondary" onClick={() => onRejectRequest(req)}>Reject</Button>
+                                    <Button size="sm" onClick={() => onAcceptRequest(req)}>Accept</Button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             <div className="space-y-2">
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Activity</h3>
                 {myNotifications.map(n => (
                     <div key={n.id} className={`p-4 rounded-lg flex gap-4 ${n.read ? 'bg-white border border-gray-100' : 'bg-indigo-50 border border-indigo-100'}`}>
                         <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ${n.type === 'success' ? 'bg-green-500' : 'bg-blue-500'}`}></div>
@@ -1068,7 +1266,7 @@ const NotificationsView: React.FC<{ notifications: Notification[], user: User }>
                         </div>
                     </div>
                 ))}
-                {myNotifications.length === 0 && (
+                {myNotifications.length === 0 && joinRequests.length === 0 && (
                     <div className="text-center py-12">
                         <div className="bg-gray-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
                             <Icons.Bell className="w-8 h-8 text-gray-400" />

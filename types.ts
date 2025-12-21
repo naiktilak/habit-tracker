@@ -68,6 +68,18 @@ export interface Notification {
   type: 'info' | 'alert' | 'success';
 }
 
+export type JoinRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export interface GroupJoinRequest {
+  id: string;
+  groupId: string;
+  groupName: string;
+  requestedByUserId: string; // The person who sent the invite
+  requestedUserId: string;   // The person being invited
+  status: JoinRequestStatus;
+  createdAt: number;
+}
+
 export interface AppState {
   currentUser: User | null;
   users: User[];
