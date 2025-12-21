@@ -23,10 +23,11 @@ import {
     markNotificationsReadBatch,
     createJoinRequestsBatch,
     createJoinRequest,
-    updateJoinRequest
+    updateJoinRequest,
+    createAchievementsBatch
 } from './services/firebaseService';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs } from 'firebase/firestore';
-import { User, Group, Habit, HabitStatus, HabitFrequency, ChatMessage, Notification, GroupJoinRequest, JoinRequestStatus } from './types';
+import { User, Group, Habit, HabitStatus, HabitFrequency, ChatMessage, Notification, GroupJoinRequest, JoinRequestStatus, Achievement, Log } from './types';
 import { MOTIVATIONAL_QUOTES } from './constants';
 import { Icons } from './components/Icons';
 import { Button, Input, Card, Modal } from './components/UI';
@@ -50,13 +51,14 @@ const App: React.FC = () => {
     const [messagesMap, setMessagesMap] = useState<Record<string, ChatMessage>>({});
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [joinRequests, setJoinRequests] = useState<GroupJoinRequest[]>([]);
+    const [achievements, setAchievements] = useState<Achievement[]>([]);
 
     // Derived State
     const habits = useMemo(() => {
         const merged = { ...myHabitsMap, ...groupHabitsMap };
         return Object.values(merged);
     }, [myHabitsMap, groupHabitsMap]);
-    const messages = useMemo(() => Object.values(messagesMap).sort((a,b) => a.timestamp - b.timestamp), [messagesMap]);
+    const messages = useMemo(() => Object.values(messagesMap).sort((a: ChatMessage, b: ChatMessage) => a.timestamp - b.timestamp), [messagesMap]);
 
     // UI State
     const [isWelcomeModalOpen, setIsWelcomeModalOpen] = useState(false);
@@ -77,7 +79,7 @@ const App: React.FC = () => {
     const [selectedDate, setSelectedDate] = useState(new Date());
 
     const [currentView, setCurrentView] = useState<
-        'dashboard' | 'personal' | 'group' | 'notifications'
+        'dashboard' | 'personal' | 'group' | 'notifications' | 'achievements'
     >('dashboard');
 
     // --- INITIAL SYNC & LISTENERS ---
@@ -124,6 +126,11 @@ const App: React.FC = () => {
             setJoinRequests(snap.docs.map(d => d.data() as GroupJoinRequest));
         });
 
+        // 6. Listen to Achievements
+        const unsubAchievements = onSnapshot(query(collection(db, "achievements"), where("userId", "==", user.uid)), (snap) => {
+            setAchievements(snap.docs.map(d => d.data() as Achievement));
+        });
+
         // Show Quote on load
         setWelcomeQuote(MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)]);
         setIsWelcomeModalOpen(true);
@@ -133,6 +140,7 @@ const App: React.FC = () => {
             unsubGroups();
             unsubNotifs();
             unsubRequests();
+            unsubAchievements();
         };
     }, [user]);
 
@@ -223,14 +231,38 @@ const App: React.FC = () => {
         }
     }, [user, groups]);
 
-    // --- SMART NOTIFICATIONS (Client-side Trigger) ---
+    // --- LOGIC: Streak Calculation for Logic Reuse ---
+    const calculateStreak = (habit: Habit): number => {
+        let streak = 0;
+        const today = new Date();
+        const todayStr = format(today, 'yyyy-MM-dd');
+        const isTodayDone = habit.logs[todayStr]?.status === HabitStatus.DONE;
+        if (isTodayDone) streak++;
+
+        let current = subDays(today, 1);
+        while (true) {
+            const dStr = format(current, 'yyyy-MM-dd');
+            const status = habit.logs[dStr]?.status;
+            if (status === HabitStatus.DONE) {
+                streak++;
+                current = subDays(current, 1);
+            } else {
+                break;
+            }
+        }
+        return streak;
+    };
+
+
+    // --- SMART NOTIFICATIONS (Client-side Trigger) & ACHIEVEMENTS CHECK ---
     useEffect(() => {
         if (!currentUser || !habits.length) return;
 
-        const checkSmartNotifications = async () => {
+        const checkSmartNotificationsAndAchievements = async () => {
             const now = new Date();
             const todayStr = format(now, 'yyyy-MM-dd');
             const newNotifications: Notification[] = [];
+            const newAchievements: Achievement[] = [];
 
             // 1. Daily Reminder
             if (currentUser.dailyReminderTime) {
@@ -253,36 +285,22 @@ const App: React.FC = () => {
                 }
             }
 
-            // 2. Streak Protection (After 8 PM)
-            const protectionTime = set(now, { hours: 20, minutes: 0, seconds: 0, milliseconds: 0 }); // 8:00 PM
-            if (isAfter(now, protectionTime)) {
-                // Check each habit
-                // We need to calculate streak here locally to determine risk
-                // Helper to check if habit has active streak > 0 AND not done today
-                habits.forEach(habit => {
-                    if (habit.userId !== currentUser.id || habit.completed) return; // Only my active habits
+            // Iterate my habits for Risk & Achievements
+            const myHabits = habits.filter(h => h.userId === currentUser.id && !h.completed);
 
+            myHabits.forEach(habit => {
+                // Streak Logic
+                const streak = calculateStreak(habit);
+
+                // Risk Check (After 8 PM)
+                const protectionTime = set(now, { hours: 20, minutes: 0, seconds: 0, milliseconds: 0 }); // 8:00 PM
+                if (isAfter(now, protectionTime)) {
                     const isDoneToday = habit.logs[todayStr]?.status === HabitStatus.DONE;
-                    if (isDoneToday) return; // Already done, no risk
+                    if (!isDoneToday && streak > 0) {
+                         const alertId = `streak-risk-${habit.id}-${todayStr}`;
+                         const alreadySent = notifications.some(n => n.id === alertId);
 
-                    // Check if there was a streak up to yesterday
-                    let streak = 0;
-                    let current = subDays(now, 1);
-                    while (true) {
-                        const dStr = format(current, 'yyyy-MM-dd');
-                        if (habit.logs[dStr]?.status === HabitStatus.DONE) {
-                            streak++;
-                            current = subDays(current, 1);
-                        } else {
-                            break;
-                        }
-                    }
-
-                    if (streak > 0) {
-                        const alertId = `streak-risk-${habit.id}-${todayStr}`;
-                        const alreadySent = notifications.some(n => n.id === alertId);
-
-                        if (!alreadySent) {
+                         if (!alreadySent) {
                              newNotifications.push({
                                 id: alertId,
                                 userId: currentUser.id,
@@ -293,7 +311,52 @@ const App: React.FC = () => {
                             });
                         }
                     }
+                }
+
+                // Achievement Check
+                const milestones = [
+                    { days: 11, type: 'BRONZE' as const },
+                    { days: 21, type: 'SILVER' as const },
+                    { days: 31, type: 'GOLD' as const }
+                ];
+
+                milestones.forEach(m => {
+                    if (streak >= m.days) {
+                        const achId = `${currentUser.id}-${habit.id}-${m.days}`;
+                        const alreadyEarned = achievements.some(a => a.id === achId);
+
+                        // Check if we already staged this achievement in this loop (edge case: multiple milestones at once?)
+                        // Streak 31 implies 11 and 21 also met. We should award all if missing.
+                        const alreadyStaged = newAchievements.some(a => a.id === achId);
+
+                        if (!alreadyEarned && !alreadyStaged) {
+                            const newAch: Achievement = {
+                                id: achId,
+                                userId: currentUser.id,
+                                habitId: habit.id,
+                                habitName: habit.title,
+                                milestone: m.days as 11 | 21 | 31,
+                                badgeType: m.type,
+                                earnedAt: Date.now()
+                            };
+                            newAchievements.push(newAch);
+
+                            // Notification for Achievement
+                            newNotifications.push({
+                                id: `ach-notif-${achId}`,
+                                userId: currentUser.id,
+                                message: `🏆 You earned the ${m.days}-Day Unbreakable badge for ${habit.title}!`,
+                                read: false,
+                                timestamp: Date.now(),
+                                type: 'success'
+                            });
+                        }
+                    }
                 });
+            });
+
+            if (newAchievements.length > 0) {
+                await createAchievementsBatch(newAchievements);
             }
 
             if (newNotifications.length > 0) {
@@ -301,10 +364,10 @@ const App: React.FC = () => {
             }
         };
 
-        const timer = setTimeout(checkSmartNotifications, 5000); // Check 5s after load/update to avoid race conditions
+        const timer = setTimeout(checkSmartNotificationsAndAchievements, 5000); // Check 5s after load/update
         return () => clearTimeout(timer);
 
-    }, [currentUser, habits, notifications]);
+    }, [currentUser, habits, notifications, achievements]);
 
 
     if (loading) return <div className="p-6">Checking login...</div>;
@@ -736,6 +799,12 @@ const App: React.FC = () => {
                             onClick={() => { setCurrentView('personal'); setActiveGroupId(null); setShowMobileMenu(false); }}
                         />
                         <NavItem
+                            icon={<Icons.Trophy className="w-5 h-5" />}
+                            label="Your Achievements"
+                            isActive={currentView === 'achievements'}
+                            onClick={() => { setCurrentView('achievements'); setActiveGroupId(null); setShowMobileMenu(false); }}
+                        />
+                        <NavItem
                             icon={
                                 <div className="relative">
                                     <Icons.Bell className="w-5 h-5" />
@@ -800,6 +869,7 @@ const App: React.FC = () => {
                         <h2 className="text-xl font-semibold text-gray-800">
                             {currentView === 'dashboard' && 'Overview'}
                             {currentView === 'personal' && 'Personal Habits'}
+                            {currentView === 'achievements' && 'Your Achievements'}
                             {currentView === 'notifications' && 'Notifications'}
                             {currentView === 'group' && activeGroup?.name}
                         </h2>
@@ -824,6 +894,11 @@ const App: React.FC = () => {
                             habits={habits}
                             groups={groups}
                             notifications={notifications}
+                        />
+                    )}
+                    {currentView === 'achievements' && (
+                        <AchievementsView
+                            achievements={achievements}
                         />
                     )}
                     {currentView === 'notifications' && (
@@ -1067,6 +1142,101 @@ const App: React.FC = () => {
     );
 };
 
+const AchievementsView: React.FC<{ achievements: Achievement[] }> = ({ achievements }) => {
+    // Sort by earned date (newest first)
+    const sortedAchievements = [...achievements].sort((a, b) => b.earnedAt - a.earnedAt);
+
+    const getBadgeStyle = (type: string) => {
+        switch (type) {
+            case 'BRONZE':
+                return {
+                    icon: <Icons.Flame className="w-8 h-8 text-orange-600" />,
+                    bg: 'bg-orange-50',
+                    border: 'border-orange-200',
+                    text: 'text-orange-900',
+                    label: 'Spark'
+                };
+            case 'SILVER':
+                return {
+                    icon: <Icons.Zap className="w-8 h-8 text-slate-500" />,
+                    bg: 'bg-slate-50',
+                    border: 'border-slate-200',
+                    text: 'text-slate-900',
+                    label: 'Momentum'
+                };
+            case 'GOLD':
+                return {
+                    icon: <Icons.Trophy className="w-8 h-8 text-yellow-500" />,
+                    bg: 'bg-yellow-50',
+                    border: 'border-yellow-200',
+                    text: 'text-yellow-900',
+                    label: 'Champion'
+                };
+            default:
+                return {
+                    icon: <Icons.Award className="w-8 h-8 text-gray-500" />,
+                    bg: 'bg-gray-50',
+                    border: 'border-gray-200',
+                    text: 'text-gray-900',
+                    label: 'Award'
+                };
+        }
+    };
+
+    return (
+        <div className="space-y-6">
+            <div className="flex items-center gap-3">
+                <div className="bg-yellow-100 p-2 rounded-lg">
+                    <Icons.Trophy className="w-6 h-6 text-yellow-600" />
+                </div>
+                <div>
+                    <h2 className="text-2xl font-bold text-gray-900">Your Achievements</h2>
+                    <p className="text-gray-500">Celebrate your consistency and milestones!</p>
+                </div>
+            </div>
+
+            {sortedAchievements.length === 0 ? (
+                <Card className="p-12 text-center flex flex-col items-center justify-center min-h-[400px]">
+                    <div className="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mb-6">
+                        <Icons.Award className="w-12 h-12 text-gray-400 opacity-50" />
+                    </div>
+                    <h3 className="text-xl font-bold text-gray-900 mb-2">No badges yet</h3>
+                    <p className="text-gray-500 max-w-sm mx-auto">
+                        Start building streaks on your habits to earn badges. Your first milestone is just 11 days away!
+                    </p>
+                </Card>
+            ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {sortedAchievements.map(ach => {
+                        const style = getBadgeStyle(ach.badgeType);
+                        return (
+                            <Card key={ach.id} className={`p-6 border ${style.border} ${style.bg} relative overflow-hidden transition-all hover:shadow-md`}>
+                                <div className="absolute top-0 right-0 p-4 opacity-10">
+                                    {style.icon}
+                                </div>
+                                <div className="flex flex-col items-center text-center relative z-10">
+                                    <div className="w-16 h-16 bg-white rounded-full shadow-sm flex items-center justify-center mb-4 border border-gray-100">
+                                        {style.icon}
+                                    </div>
+                                    <h3 className={`font-bold text-lg mb-1 ${style.text}`}>
+                                        {ach.milestone}-Day Streak
+                                    </h3>
+                                    <div className="text-sm font-medium text-gray-600 mb-3 px-3 py-1 bg-white/50 rounded-full">
+                                        {ach.habitName}
+                                    </div>
+                                    <p className="text-xs text-gray-500 mt-auto">
+                                        Earned on {format(ach.earnedAt, 'MMM d, yyyy')}
+                                    </p>
+                                </div>
+                            </Card>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+};
+
 const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], notifications: Notification[] }> = ({ user, habits, groups, notifications }) => {
     const myHabits = habits.filter(h => h.userId === user.id && !h.completed);
     const myNotifications = notifications.filter(n => n.userId === user.id || n.userId === 'ALL');
@@ -1112,7 +1282,7 @@ const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], no
         let rangeDone = 0;
 
         myHabits.forEach(h => {
-            Object.values(h.logs).forEach(log => {
+            Object.values(h.logs).forEach((log: Log) => {
                  const logDate = parseISO(log.date);
                  if (logDate >= startDate && logDate <= endDate) {
                      rangeLogs++;
@@ -1147,7 +1317,7 @@ const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], no
     const lastMonthRate = calculateRate(lastMonthStart, lastMonthEnd);
     const monthlyDiff = thisMonthRate - lastMonthRate;
 
-    const completedLogsAllTime = myHabits.reduce((acc, h) => acc + Object.values(h.logs).filter(l => l.status === HabitStatus.DONE).length, 0);
+    const completedLogsAllTime = myHabits.reduce((acc, h) => acc + Object.values(h.logs).filter((l: Log) => l.status === HabitStatus.DONE).length, 0);
 
     return (
         <div className="space-y-6">
@@ -1246,8 +1416,8 @@ const NotificationsView: React.FC<{
                                     <p className="text-xs text-gray-500 mt-1">From a friend</p>
                                 </div>
                                 <div className="flex gap-2">
-                                    <Button size="sm" variant="secondary" onClick={() => onRejectRequest(req)}>Reject</Button>
-                                    <Button size="sm" onClick={() => onAcceptRequest(req)}>Accept</Button>
+                                    <Button className="px-2 py-1 text-sm" variant="secondary" onClick={() => onRejectRequest(req)}>Reject</Button>
+                                    <Button className="px-2 py-1 text-sm" onClick={() => onAcceptRequest(req)}>Accept</Button>
                                 </div>
                             </div>
                         ))}
@@ -1593,13 +1763,13 @@ const HabitTrackerView: React.FC<{
         memberHabits.forEach(h => {
             if (h.frequency === HabitFrequency.WEEKLY) {
                 const expected = (daysToScore.length / 7) * (h.targetDaysPerWeek || 1);
-                const actual = Object.values(h.logs).filter(l => l.status === HabitStatus.DONE && daysToScore.find(d => format(d, 'yyyy-MM-dd') === l.date)).length;
+                const actual = Object.values(h.logs).filter((l: Log) => l.status === HabitStatus.DONE && daysToScore.find(d => format(d, 'yyyy-MM-dd') === l.date)).length;
                 totalPoints += Math.max(1, expected);
                 earnedPoints += Math.min(actual, expected);
             } else {
                 const expectedDivisor = h.frequency === HabitFrequency.INTERVAL ? (h.intervalDays || 1) : 1;
                 const expected = daysToScore.length / expectedDivisor;
-                const actual = Object.values(h.logs).filter(l => l.status === HabitStatus.DONE && daysToScore.find(d => format(d, 'yyyy-MM-dd') === l.date)).length;
+                const actual = Object.values(h.logs).filter((l: Log) => l.status === HabitStatus.DONE && daysToScore.find(d => format(d, 'yyyy-MM-dd') === l.date)).length;
                 totalPoints += expected;
                 earnedPoints += actual;
             }
@@ -1942,16 +2112,16 @@ const HabitTrackerView: React.FC<{
                                                                                 <div className="w-full bg-gray-200 rounded-full h-2.5">
                                                                                     <div
                                                                                         className="bg-green-500 h-2.5 rounded-full"
-                                                                                        style={{ width: `${Math.min(100, (Object.values(habit.logs).filter(l => l.status === HabitStatus.DONE).length / 30) * 100)}%` }}
+                                                                                        style={{ width: `${Math.min(100, (Object.values(habit.logs).filter((l: Log) => l.status === HabitStatus.DONE).length / 30) * 100)}%` }}
                                                                                     ></div>
                                                                                 </div>
-                                                                                <span className="text-xs text-gray-500 w-12">{Object.values(habit.logs).filter(l => l.status === HabitStatus.DONE).length} days</span>
+                                                                                <span className="text-xs text-gray-500 w-12">{Object.values(habit.logs).filter((l: Log) => l.status === HabitStatus.DONE).length} days</span>
                                                                             </div>
                                                                         </td>
                                                                     )}
                                                                     {viewMode === 'weekly' && (
                                                                         <td className="text-center text-sm font-semibold text-gray-700">
-                                                                            {Object.values(habit.logs).filter(l => l.status === HabitStatus.DONE).length}
+                                                                            {Object.values(habit.logs).filter((l: Log) => l.status === HabitStatus.DONE).length}
                                                                         </td>
                                                                     )}
                                                                 </tr>

@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import {
@@ -9,7 +11,7 @@ import {
   deleteDoc,
   writeBatch
 } from "firebase/firestore";
-import { User, Group, Habit, ChatMessage, Notification, GroupJoinRequest } from "../types";
+import { User, Group, Habit, ChatMessage, Notification, GroupJoinRequest, Achievement } from "../types";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -115,3 +117,18 @@ export const markNotificationsReadBatch = async (userId: string, notificationIds
     });
     await batch.commit();
 }
+
+// Achievements
+export const createAchievement = async (achievement: Achievement) => {
+  const achRef = doc(db, "achievements", achievement.id);
+  await setDoc(achRef, achievement);
+};
+
+export const createAchievementsBatch = async (achievements: Achievement[]) => {
+  const batch = writeBatch(db);
+  achievements.forEach(a => {
+      const ref = doc(db, "achievements", a.id);
+      batch.set(ref, a);
+  });
+  await batch.commit();
+};

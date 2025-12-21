@@ -35,7 +35,11 @@ import {
   Archive,
   ArchiveRestore,
   Key,
-  Mail
+  Mail,
+  Trophy,
+  Medal,
+  Award,
+  Zap
 } from 'lucide-react';
 
 export const Icons = {
@@ -74,5 +78,9 @@ export const Icons = {
   Archive,
   ArchiveRestore,
   Key,
-  Mail
+  Mail,
+  Trophy,
+  Medal,
+  Award,
+  Zap
 };
