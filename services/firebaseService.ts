@@ -9,7 +9,7 @@ import {
   deleteDoc,
   writeBatch
 } from "firebase/firestore";
-import { User, Group, Habit, ChatMessage, Notification } from "../types";
+import { User, Group, Habit, ChatMessage, Notification, GroupJoinRequest } from "../types";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -81,6 +81,26 @@ export const createNotificationsBatch = async (notifications: Notification[]) =>
     });
     await batch.commit();
 }
+
+// Join Requests
+export const createJoinRequest = async (request: GroupJoinRequest) => {
+  const reqRef = doc(db, "groupJoinRequests", request.id);
+  await setDoc(reqRef, request);
+};
+
+export const createJoinRequestsBatch = async (requests: GroupJoinRequest[]) => {
+    const batch = writeBatch(db);
+    requests.forEach(r => {
+        const ref = doc(db, "groupJoinRequests", r.id);
+        batch.set(ref, r);
+    });
+    await batch.commit();
+}
+
+export const updateJoinRequest = async (requestId: string, data: Partial<GroupJoinRequest>) => {
+  const reqRef = doc(db, "groupJoinRequests", requestId);
+  await updateDoc(reqRef, data);
+};
 
 export const updateNotification = async (notifId: string, data: Partial<Notification>) => {
   const notifRef = doc(db, "notifications", notifId);
