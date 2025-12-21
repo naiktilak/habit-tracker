@@ -80,6 +80,16 @@ export interface GroupJoinRequest {
   createdAt: number;
 }
 
+export interface Achievement {
+  id: string;
+  userId: string;
+  habitId: string;
+  habitName: string;
+  milestone: 11 | 21 | 31;
+  badgeType: 'BRONZE' | 'SILVER' | 'GOLD';
+  earnedAt: number;
+}
+
 export interface AppState {
   currentUser: User | null;
   users: User[];
