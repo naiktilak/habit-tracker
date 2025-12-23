@@ -9,9 +9,10 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
-  writeBatch
+  writeBatch,
+  getDoc
 } from "firebase/firestore";
-import { User, Group, Habit, ChatMessage, Notification, GroupJoinRequest, Achievement } from "../types";
+import { User, Group, Habit, ChatMessage, Notification, GroupJoinRequest, Achievement, DailyMetric } from "../types";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -131,4 +132,19 @@ export const createAchievementsBatch = async (achievements: Achievement[]) => {
       batch.set(ref, a);
   });
   await batch.commit();
+};
+
+// Daily Metrics
+export const upsertDailyMetric = async (userId: string, metric: DailyMetric) => {
+  const metricRef = doc(db, "users", userId, "dailyMetrics", metric.date);
+  await setDoc(metricRef, metric, { merge: true });
+};
+
+export const getDailyMetric = async (userId: string, date: string): Promise<DailyMetric | null> => {
+  const metricRef = doc(db, "users", userId, "dailyMetrics", date);
+  const snap = await getDoc(metricRef);
+  if (snap.exists()) {
+    return snap.data() as DailyMetric;
+  }
+  return null;
 };
