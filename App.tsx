@@ -30,7 +30,7 @@ import {
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs } from 'firebase/firestore';
 import { User, Group, Habit, HabitStatus, HabitFrequency, ChatMessage, Notification, GroupJoinRequest, JoinRequestStatus, Achievement, Log, DailyMetric } from './types';
 import { MOTIVATIONAL_QUOTES } from './constants';
-import { loadGoogleScript, initTokenClient, requestGoogleAuth, handleAuthSuccess, syncSteps } from './services/googleFitService';
+import { loadGoogleScript, initTokenClient, requestGoogleAuth, handleAuthSuccess, disconnectGoogleFit } from './services/googleFitService';
 import { Icons } from './components/Icons';
 import { Button, Input, Card, Modal } from './components/UI';
 import { useAuth } from "./AuthContext";
@@ -54,6 +54,7 @@ const App: React.FC = () => {
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [joinRequests, setJoinRequests] = useState<GroupJoinRequest[]>([]);
     const [achievements, setAchievements] = useState<Achievement[]>([]);
+    const [dailyMetrics, setDailyMetrics] = useState<Record<string, number>>({});
 
     // Derived State
     const habits = useMemo(() => {
@@ -66,6 +67,7 @@ const App: React.FC = () => {
     const [isWelcomeModalOpen, setIsWelcomeModalOpen] = useState(false);
     const [welcomeQuote, setWelcomeQuote] = useState('');
     const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+    const [activeProfileTab, setActiveProfileTab] = useState<'profile' | 'apps'>('profile');
     const [editProfileName, setEditProfileName] = useState('');
     const [editProfileAvatar, setEditProfileAvatar] = useState('');
     const [editProfileReminder, setEditProfileReminder] = useState('');
@@ -103,6 +105,11 @@ const App: React.FC = () => {
              }
           }
         });
+
+        // Silent Sync / Check: If connected, we might want to refresh but we can't without prompt usually.
+        // We rely on the stored connected state.
+        // If we wanted to attempt a silent refresh, we'd need a different flow or backend.
+        // For now, the user sees "Connected" based on Firestore.
       }).catch(err => console.error(err));
     }, [currentUser]); // Re-init client if user changes (though script load is global)
 
@@ -172,6 +179,7 @@ const App: React.FC = () => {
 
         // Reset state to prevent stale data if user changes
         setMyHabitsMap({});
+        setDailyMetrics({});
 
         const myId = user.uid;
 
@@ -190,8 +198,25 @@ const App: React.FC = () => {
             });
         });
 
+        // Listener B: Daily Metrics (Steps)
+        const unsubMetrics = onSnapshot(collection(db, "users", myId, "dailyMetrics"), (snap) => {
+             setDailyMetrics(prev => {
+                 const next = { ...prev };
+                 snap.docChanges().forEach(change => {
+                     const data = change.doc.data() as DailyMetric;
+                     if (change.type === 'added' || change.type === 'modified') {
+                         next[data.date] = data.steps;
+                     } else if (change.type === 'removed') {
+                         delete next[data.date];
+                     }
+                 });
+                 return next;
+             });
+        });
+
         return () => {
             unsubMyHabits();
+            unsubMetrics();
         };
     }, [user]);
 
@@ -432,20 +457,7 @@ const App: React.FC = () => {
     const handleGoogleDisconnect = async () => {
         if (!currentUser) return;
         if (!window.confirm("Disconnect Google Fit? This will stop auto-tracking.")) return;
-        const updatedUser: User = {
-            ...currentUser,
-            connectedApps: {
-                ...currentUser.connectedApps,
-                googleFit: {
-                    ...currentUser.connectedApps?.googleFit,
-                    connected: false,
-                    lastSync: currentUser.connectedApps?.googleFit?.lastSync || 0
-                }
-            }
-        };
-        // Note: We don't revoke token here as implicit tokens expire anyway, just updating UI state preference
-        // ideally we would call google.accounts.oauth2.revoke but we don't store the token permanently
-        await upsertUser(updatedUser);
+        await disconnectGoogleFit(currentUser);
     };
 
     const openProfileModal = () => {
@@ -453,6 +465,7 @@ const App: React.FC = () => {
         setEditProfileName(currentUser.name);
         setEditProfileAvatar(currentUser.avatar);
         setEditProfileReminder(currentUser.dailyReminderTime || '');
+        setActiveProfileTab('profile');
         setIsProfileModalOpen(true);
     };
 
@@ -1007,6 +1020,7 @@ const App: React.FC = () => {
                             onSendMessage={sendMessage}
                             onOpenInvite={() => setIsInviteModalOpen(true)}
                             onOpenManageGroup={() => setIsManageGroupModalOpen(true)}
+                            dailyMetrics={dailyMetrics}
                         />
                     )}
                 </div>
@@ -1028,41 +1042,60 @@ const App: React.FC = () => {
             </Modal>
 
             <Modal isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} title="Edit Profile">
-                <form onSubmit={handleUpdateProfile} className="space-y-4">
-                    <div className="flex flex-col items-center mb-4">
-                        <div className="relative group cursor-pointer" onClick={randomizeAvatar}>
-                            <img src={editProfileAvatar} className="w-20 h-20 rounded-full bg-gray-100 mb-2" />
-                            <div className="absolute inset-0 bg-black bg-opacity-30 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                <Icons.RefreshCw className="w-6 h-6 text-white" />
-                            </div>
-                        </div>
-                        <span className="text-xs text-gray-400">Click avatar to randomize</span>
-                    </div>
-                    <Input
-                        label="Display Name"
-                        value={editProfileName}
-                        onChange={e => setEditProfileName(e.target.value)}
-                        required
-                    />
-                    <Input
-                        label="Avatar URL (Optional)"
-                        value={editProfileAvatar}
-                        onChange={e => setEditProfileAvatar(e.target.value)}
-                    />
-                    <Input
-                        label="Daily Reminder Time"
-                        type="time"
-                        value={editProfileReminder}
-                        onChange={e => setEditProfileReminder(e.target.value)}
-                        placeholder="Select time"
-                    />
-                    <div className="flex gap-3 pt-2">
-                        <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsProfileModalOpen(false)}>Cancel</Button>
-                        <Button type="submit" className="flex-1">Save Profile</Button>
-                    </div>
+                <div className="flex gap-4 border-b border-gray-100 mb-4">
+                    <button
+                        className={`pb-2 px-1 text-sm font-medium transition-colors relative ${activeProfileTab === 'profile' ? 'text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}
+                        onClick={() => setActiveProfileTab('profile')}
+                    >
+                        Profile
+                        {activeProfileTab === 'profile' && <span className="absolute bottom-0 left-0 w-full h-0.5 bg-indigo-600"></span>}
+                    </button>
+                    <button
+                        className={`pb-2 px-1 text-sm font-medium transition-colors relative ${activeProfileTab === 'apps' ? 'text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}
+                        onClick={() => setActiveProfileTab('apps')}
+                    >
+                        Connected Apps
+                        {activeProfileTab === 'apps' && <span className="absolute bottom-0 left-0 w-full h-0.5 bg-indigo-600"></span>}
+                    </button>
+                </div>
 
-                    <div className="border-t border-gray-100 pt-4 mt-2">
-                        <h4 className="text-sm font-medium text-gray-700 mb-3">Connected Apps</h4>
+                {activeProfileTab === 'profile' ? (
+                    <form onSubmit={handleUpdateProfile} className="space-y-4">
+                        <div className="flex flex-col items-center mb-4">
+                            <div className="relative group cursor-pointer" onClick={randomizeAvatar}>
+                                <img src={editProfileAvatar} className="w-20 h-20 rounded-full bg-gray-100 mb-2" />
+                                <div className="absolute inset-0 bg-black bg-opacity-30 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <Icons.RefreshCw className="w-6 h-6 text-white" />
+                                </div>
+                            </div>
+                            <span className="text-xs text-gray-400">Click avatar to randomize</span>
+                        </div>
+                        <Input
+                            label="Display Name"
+                            value={editProfileName}
+                            onChange={e => setEditProfileName(e.target.value)}
+                            required
+                        />
+                        <Input
+                            label="Avatar URL (Optional)"
+                            value={editProfileAvatar}
+                            onChange={e => setEditProfileAvatar(e.target.value)}
+                        />
+                        <Input
+                            label="Daily Reminder Time"
+                            type="time"
+                            value={editProfileReminder}
+                            onChange={e => setEditProfileReminder(e.target.value)}
+                            placeholder="Select time"
+                        />
+                        <div className="flex gap-3 pt-2">
+                            <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsProfileModalOpen(false)}>Cancel</Button>
+                            <Button type="submit" className="flex-1">Save Profile</Button>
+                        </div>
+                    </form>
+                ) : (
+                    <div className="space-y-4">
+                        <h4 className="text-sm font-medium text-gray-700 mb-2">Integrations</h4>
                         <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
                              <div className="flex items-center gap-3">
                                 <div className="p-2 bg-white rounded-md shadow-sm">
@@ -1071,10 +1104,15 @@ const App: React.FC = () => {
                                 <div>
                                     <p className="text-sm font-medium text-gray-900">Google Fit</p>
                                     {currentUser?.connectedApps?.googleFit?.connected ? (
-                                        <p className="text-xs text-green-600 flex items-center gap-1">
-                                            <Icons.Check className="w-3 h-3" />
-                                            Synced {currentUser.connectedApps.googleFit.lastSync ? format(currentUser.connectedApps.googleFit.lastSync, 'h:mm a') : 'Just now'}
-                                        </p>
+                                        <div className="flex flex-col">
+                                            <p className="text-xs text-green-600 flex items-center gap-1 font-medium">
+                                                <Icons.Check className="w-3 h-3" />
+                                                Connected
+                                            </p>
+                                            <p className="text-[10px] text-gray-400 mt-0.5">
+                                                Last sync: {currentUser.connectedApps.googleFit.lastSync ? format(currentUser.connectedApps.googleFit.lastSync, 'MMM d, h:mm a') : 'Just now'}
+                                            </p>
+                                        </div>
                                     ) : (
                                         <p className="text-xs text-gray-500">Auto-track steps</p>
                                     )}
@@ -1092,8 +1130,25 @@ const App: React.FC = () => {
                                  )}
                              </div>
                         </div>
+
+                        <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200 opacity-60">
+                             <div className="flex items-center gap-3">
+                                <div className="p-2 bg-white rounded-md shadow-sm">
+                                    <Icons.Watch className="w-5 h-5 text-gray-400" />
+                                </div>
+                                <div>
+                                    <p className="text-sm font-medium text-gray-900">Fitbit</p>
+                                    <p className="text-xs text-gray-500">Coming soon</p>
+                                </div>
+                             </div>
+                             <div>
+                                 <Button type="button" variant="secondary" className="text-xs py-1 h-8" disabled>
+                                     Connect
+                                 </Button>
+                             </div>
+                        </div>
                     </div>
-                </form>
+                )}
             </Modal>
 
             <Modal isOpen={isCreateGroupModalOpen} onClose={() => setIsCreateGroupModalOpen(false)} title="Create New Group">
@@ -1578,7 +1633,8 @@ const HabitTrackerView: React.FC<{
     onSendMessage: (t: string) => void;
     onOpenInvite?: () => void;
     onOpenManageGroup?: () => void;
-}> = ({ isGroup, activeGroupId, habits, setHabits, users, groups, currentUser, selectedDate, setSelectedDate, onToggleStatus, onToggleCompletion, onAddHabit, onGetAI, aiInsight, isAiLoading, setAiInsight, messages, onSendMessage, onOpenInvite, onOpenManageGroup }) => {
+    dailyMetrics: Record<string, number>;
+}> = ({ isGroup, activeGroupId, habits, setHabits, users, groups, currentUser, selectedDate, setSelectedDate, onToggleStatus, onToggleCompletion, onAddHabit, onGetAI, aiInsight, isAiLoading, setAiInsight, messages, onSendMessage, onOpenInvite, onOpenManageGroup, dailyMetrics }) => {
 
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
@@ -2206,6 +2262,40 @@ const HabitTrackerView: React.FC<{
 
                                                                         const { enabled, reason } = isHabitActionable(habit, d);
                                                                         const isDisabled = (!enabled && !isDone && !isMissed) || habit.completed;
+
+                                                                        // Step Habit Logic
+                                                                        const isStepHabit = habit.autoTracking?.type === 'STEPS';
+                                                                        const stepTarget = habit.autoTracking?.targetValue || 0;
+                                                                        const daySteps = dailyMetrics[dStr] || 0;
+                                                                        const stepProgress = Math.min(100, (daySteps / stepTarget) * 100);
+
+                                                                        if (isStepHabit && isMe) {
+                                                                            return (
+                                                                                <td key={dStr} className="text-center p-1 w-32 align-middle">
+                                                                                     <div className="flex flex-col items-center justify-center gap-1 w-full max-w-[120px] mx-auto">
+                                                                                        <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                                                                            <div
+                                                                                                className={`h-full rounded-full transition-all duration-500 ${isDone ? 'bg-green-500' : 'bg-indigo-500'}`}
+                                                                                                style={{ width: `${stepProgress}%` }}
+                                                                                            ></div>
+                                                                                        </div>
+                                                                                        <div className="text-[10px] text-gray-500 font-medium flex items-center justify-between w-full px-0.5">
+                                                                                            <span>{daySteps.toLocaleString()}</span>
+                                                                                            <span className="text-gray-400">/ {stepTarget.toLocaleString()}</span>
+                                                                                        </div>
+                                                                                        {/* Manual Override (hidden unless hover or if close to target but not done) */}
+                                                                                        {!isDone && !isDisabled && (
+                                                                                            <button
+                                                                                                onClick={() => onToggleStatus(habit.id, dStr)}
+                                                                                                className="text-[10px] text-gray-400 hover:text-indigo-600 underline opacity-0 group-hover:opacity-100 transition-opacity"
+                                                                                            >
+                                                                                                Mark Done
+                                                                                            </button>
+                                                                                        )}
+                                                                                     </div>
+                                                                                </td>
+                                                                            );
+                                                                        }
 
                                                                         return (
                                                                             <td key={dStr} className="text-center p-1">

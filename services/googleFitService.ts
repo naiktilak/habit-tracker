@@ -120,25 +120,32 @@ export const fetchTodaySteps = async (accessToken: string): Promise<number> => {
   }
 };
 
-// 5. Orchestrator: Sync Steps (Call this from UI)
-export const syncSteps = async (user: User): Promise<number | null> => {
-  // If we had a stored token, we could use it. But Implicit flow requires validation/refresh often via interaction
-  // or checking validity. For simplicity in this client-side MVP, we assume we might need to prompt
-  // OR we rely on the caller to have obtained a token via requestGoogleAuth if needed.
+// 5. Disconnect Google Fit
+export const disconnectGoogleFit = async (user: User) => {
+    const updatedUser: User = {
+        ...user,
+        connectedApps: {
+            ...user.connectedApps,
+            googleFit: {
+                ...user.connectedApps?.googleFit,
+                connected: false,
+                // We keep the lastSync time or maybe reset it?
+                // Requirement says "keep history", lastSync refers to connection status usually.
+                // But let's just mark connected: false.
+                lastSync: user.connectedApps?.googleFit?.lastSync || 0
+            }
+        }
+    };
+    await upsertUser(updatedUser);
 
-  // However, `requestAccessToken` can skip prompt if authorized previously?
-  // Actually, implicit flow tokens expire. We usually need to request again.
-  // We'll expose `requestGoogleAuth` to UI. The callback there should call `fetchTodaySteps`.
-  // Wait, `syncSteps` implies a one-shot function.
-  // Refactor: We can't return the result synchronously from `requestGoogleAuth`.
-  return null;
+    // Revoke token if possible (Best Effort)
+    if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+        // There isn't a direct "revoke" in the implicit client object easily accessible without the token.
+        // If we had the token we could call google.accounts.oauth2.revoke(token, done).
+        // Since we don't persist the token, we rely on the app state.
+        // Future improvement: Store short-lived token in memory and revoke if present.
+    }
 };
-
-// Improved Flow for React integration:
-// 1. Component mounts -> loads script -> inits client.
-// 2. User clicks "Connect/Sync" -> calls `requestGoogleAuth`.
-// 3. Callback receives token -> calls `handleAuthSuccess`.
-// 4. `handleAuthSuccess` calls `fetchTodaySteps` -> `storeDailySteps`.
 
 export const handleAuthSuccess = async (tokenResponse: any, user: User) => {
   if (tokenResponse && tokenResponse.access_token) {
@@ -155,10 +162,11 @@ export const handleAuthSuccess = async (tokenResponse: any, user: User) => {
     await upsertDailyMetric(user.id, metric);
 
     // Update User Profile with connection status
+    // Ensure we merge with existing connectedApps to avoid overwriting other potential apps
     const updatedUser: User = {
         ...user,
         connectedApps: {
-            ...user.connectedApps,
+            ...(user.connectedApps || {}),
             googleFit: {
                 connected: true,
                 lastSync: Date.now()
