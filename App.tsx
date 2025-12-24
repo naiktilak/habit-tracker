@@ -54,7 +54,7 @@ const App: React.FC = () => {
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [joinRequests, setJoinRequests] = useState<GroupJoinRequest[]>([]);
     const [achievements, setAchievements] = useState<Achievement[]>([]);
-    const [dailyMetrics, setDailyMetrics] = useState<Record<string, number>>({});
+    const [dailyMetrics, setDailyMetrics] = useState<Record<string, DailyMetric>>({});
 
     // Derived State
     const habits = useMemo(() => {
@@ -205,7 +205,7 @@ const App: React.FC = () => {
                  snap.docChanges().forEach(change => {
                      const data = change.doc.data() as DailyMetric;
                      if (change.type === 'added' || change.type === 'modified') {
-                         next[data.date] = data.steps;
+                         next[data.date] = data;
                      } else if (change.type === 'removed') {
                          delete next[data.date];
                      }
@@ -1633,7 +1633,7 @@ const HabitTrackerView: React.FC<{
     onSendMessage: (t: string) => void;
     onOpenInvite?: () => void;
     onOpenManageGroup?: () => void;
-    dailyMetrics: Record<string, number>;
+    dailyMetrics: Record<string, DailyMetric>;
 }> = ({ isGroup, activeGroupId, habits, setHabits, users, groups, currentUser, selectedDate, setSelectedDate, onToggleStatus, onToggleCompletion, onAddHabit, onGetAI, aiInsight, isAiLoading, setAiInsight, messages, onSendMessage, onOpenInvite, onOpenManageGroup, dailyMetrics }) => {
 
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -2046,8 +2046,54 @@ const HabitTrackerView: React.FC<{
 
     const currentGroupMessages = messages.filter(m => m.groupId === activeGroupId);
 
+    // Prepare Daily Activity Data for Personal View
+    const todayStr = format(selectedDate, 'yyyy-MM-dd');
+    const todayMetric = dailyMetrics[todayStr];
+    const isToday = isSameDay(selectedDate, new Date());
+
     return (
         <div className="space-y-6">
+            {/* Today's Activity Card (Personal Space Only) */}
+            {!isGroup && (
+                <div className="bg-white p-4 rounded-xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+                    <div className="flex items-center gap-4">
+                        <div className="p-3 bg-indigo-50 rounded-full">
+                            <Icons.Activity className="w-6 h-6 text-indigo-600" />
+                        </div>
+                        <div>
+                            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">
+                                {isToday ? "Today's Activity" : `Activity on ${format(selectedDate, 'MMM d')}`}
+                            </h3>
+                            <div className="flex items-baseline gap-2">
+                                <span className="text-2xl font-bold text-gray-900">
+                                    {(todayMetric?.steps || 0).toLocaleString()}
+                                </span>
+                                <span className="text-sm text-gray-500">steps</span>
+                            </div>
+                            {todayMetric?.source === 'google-fit' && (
+                                <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+                                    <Icons.CheckCircle className="w-3 h-3 text-green-500" />
+                                    Source: Google Fit
+                                </p>
+                            )}
+                            {/* Fallback / Helper Text if connected but 0 steps */}
+                            {currentUser.connectedApps?.googleFit?.connected && (todayMetric?.steps || 0) === 0 && (
+                                <p className="text-xs text-orange-500 mt-1">
+                                    No step data yet. Carry your phone to record steps.
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                    {currentUser.connectedApps?.googleFit?.connected && (
+                        <div className="text-right">
+                            <p className="text-xs text-gray-400">
+                                Last sync: {currentUser.connectedApps.googleFit.lastSync ? format(currentUser.connectedApps.googleFit.lastSync, 'h:mm a') : '—'}
+                            </p>
+                        </div>
+                    )}
+                </div>
+            )}
+
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-xl shadow-sm">
                 <div className="flex items-center gap-2">
                     <button onClick={() => setSelectedDate(addWeeks(selectedDate, -1))} className="p-1 hover:bg-gray-100 rounded">
@@ -2266,7 +2312,8 @@ const HabitTrackerView: React.FC<{
                                                                         // Step Habit Logic
                                                                         const isStepHabit = habit.autoTracking?.type === 'STEPS';
                                                                         const stepTarget = habit.autoTracking?.targetValue || 0;
-                                                                        const daySteps = dailyMetrics[dStr] || 0;
+                                                                        const metric = dailyMetrics[dStr];
+                                                                        const daySteps = metric?.steps || 0;
                                                                         const stepProgress = Math.min(100, (daySteps / stepTarget) * 100);
 
                                                                         if (isStepHabit && isMe) {
