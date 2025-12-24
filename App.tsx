@@ -24,11 +24,13 @@ import {
     createJoinRequestsBatch,
     createJoinRequest,
     updateJoinRequest,
-    createAchievementsBatch
+    createAchievementsBatch,
+    getDailyMetric
 } from './services/firebaseService';
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs } from 'firebase/firestore';
-import { User, Group, Habit, HabitStatus, HabitFrequency, ChatMessage, Notification, GroupJoinRequest, JoinRequestStatus, Achievement, Log } from './types';
+import { User, Group, Habit, HabitStatus, HabitFrequency, ChatMessage, Notification, GroupJoinRequest, JoinRequestStatus, Achievement, Log, DailyMetric } from './types';
 import { MOTIVATIONAL_QUOTES } from './constants';
+import { loadGoogleScript, initTokenClient, requestGoogleAuth, handleAuthSuccess, syncSteps } from './services/googleFitService';
 import { Icons } from './components/Icons';
 import { Button, Input, Card, Modal } from './components/UI';
 import { useAuth } from "./AuthContext";
@@ -67,6 +69,7 @@ const App: React.FC = () => {
     const [editProfileName, setEditProfileName] = useState('');
     const [editProfileAvatar, setEditProfileAvatar] = useState('');
     const [editProfileReminder, setEditProfileReminder] = useState('');
+    const [googleSyncLoading, setGoogleSyncLoading] = useState(false);
     const [isCreateGroupModalOpen, setIsCreateGroupModalOpen] = useState(false);
     const [newGroupName, setNewGroupName] = useState('');
     const [selectedFriendIds, setSelectedFriendIds] = useState<string[]>([]);
@@ -83,6 +86,25 @@ const App: React.FC = () => {
     >('dashboard');
 
     // --- INITIAL SYNC & LISTENERS ---
+
+    useEffect(() => {
+      // Load Google Script
+      loadGoogleScript().then(() => {
+        initTokenClient(async (response) => {
+          if (currentUser && response.access_token) {
+             setGoogleSyncLoading(true);
+             try {
+                const steps = await handleAuthSuccess(response, currentUser);
+                if (steps !== null) {
+                    await evaluateStepHabits(currentUser, steps);
+                }
+             } finally {
+                setGoogleSyncLoading(false);
+             }
+          }
+        });
+      }).catch(err => console.error(err));
+    }, [currentUser]); // Re-init client if user changes (though script load is global)
 
     useEffect(() => {
         if (!user) return;
@@ -403,6 +425,29 @@ const App: React.FC = () => {
         setIsProfileModalOpen(false);
     };
 
+    const handleGoogleConnect = () => {
+        requestGoogleAuth();
+    };
+
+    const handleGoogleDisconnect = async () => {
+        if (!currentUser) return;
+        if (!window.confirm("Disconnect Google Fit? This will stop auto-tracking.")) return;
+        const updatedUser: User = {
+            ...currentUser,
+            connectedApps: {
+                ...currentUser.connectedApps,
+                googleFit: {
+                    ...currentUser.connectedApps?.googleFit,
+                    connected: false,
+                    lastSync: currentUser.connectedApps?.googleFit?.lastSync || 0
+                }
+            }
+        };
+        // Note: We don't revoke token here as implicit tokens expire anyway, just updating UI state preference
+        // ideally we would call google.accounts.oauth2.revoke but we don't store the token permanently
+        await upsertUser(updatedUser);
+    };
+
     const openProfileModal = () => {
         if (!currentUser) return;
         setEditProfileName(currentUser.name);
@@ -473,6 +518,34 @@ const App: React.FC = () => {
         }
     };
 
+    const evaluateStepHabits = async (user: User, steps: number) => {
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+        // Filter habits that track steps
+        const stepHabits = habits.filter(h => h.userId === user.id && !h.completed && h.autoTracking?.type === 'STEPS');
+
+        for (const habit of stepHabits) {
+            if (habit.autoTracking && steps >= habit.autoTracking.targetValue) {
+                // Check if already done
+                if (habit.logs[todayStr]?.status !== HabitStatus.DONE) {
+                    // Update to DONE directly
+                    const newLogs = { ...habit.logs, [todayStr]: { date: todayStr, status: HabitStatus.DONE, timestamp: Date.now() } };
+                    await updateHabit(habit.id, { logs: newLogs });
+
+                    // Notify
+                    const newNotif: Notification = {
+                        id: `n${Date.now()}-${habit.id}`,
+                        userId: user.id,
+                        message: `🎉 Auto-completed "${habit.title}"! (${steps} steps synced)`,
+                        read: false,
+                        timestamp: Date.now(),
+                        type: 'success'
+                    };
+                    await createNotificationsBatch([newNotif]);
+                }
+            }
+        }
+    }
+
     const toggleHabitCompletion = async (habitId: string) => {
         const habit = habits.find(h => h.id === habitId);
         if (habit) {
@@ -493,7 +566,8 @@ const App: React.FC = () => {
             groupId: habitData.groupId || null, // Ensure explicit null for personal habits
             logs: {},
             completed: false,
-            createdAt: Date.now()
+            createdAt: Date.now(),
+            autoTracking: habitData.autoTracking
         };
         await createHabit(newHabit);
     };
@@ -985,6 +1059,39 @@ const App: React.FC = () => {
                     <div className="flex gap-3 pt-2">
                         <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsProfileModalOpen(false)}>Cancel</Button>
                         <Button type="submit" className="flex-1">Save Profile</Button>
+                    </div>
+
+                    <div className="border-t border-gray-100 pt-4 mt-2">
+                        <h4 className="text-sm font-medium text-gray-700 mb-3">Connected Apps</h4>
+                        <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+                             <div className="flex items-center gap-3">
+                                <div className="p-2 bg-white rounded-md shadow-sm">
+                                    <Icons.Activity className="w-5 h-5 text-indigo-600" />
+                                </div>
+                                <div>
+                                    <p className="text-sm font-medium text-gray-900">Google Fit</p>
+                                    {currentUser?.connectedApps?.googleFit?.connected ? (
+                                        <p className="text-xs text-green-600 flex items-center gap-1">
+                                            <Icons.Check className="w-3 h-3" />
+                                            Synced {currentUser.connectedApps.googleFit.lastSync ? format(currentUser.connectedApps.googleFit.lastSync, 'h:mm a') : 'Just now'}
+                                        </p>
+                                    ) : (
+                                        <p className="text-xs text-gray-500">Auto-track steps</p>
+                                    )}
+                                </div>
+                             </div>
+                             <div>
+                                 {currentUser?.connectedApps?.googleFit?.connected ? (
+                                     <Button type="button" variant="secondary" className="text-xs py-1 h-8" onClick={handleGoogleDisconnect}>
+                                         Disconnect
+                                     </Button>
+                                 ) : (
+                                     <Button type="button" className="text-xs py-1 h-8" onClick={handleGoogleConnect} disabled={googleSyncLoading}>
+                                         {googleSyncLoading ? 'Connecting...' : 'Connect'}
+                                     </Button>
+                                 )}
+                             </div>
+                        </div>
                     </div>
                 </form>
             </Modal>
@@ -1483,6 +1590,8 @@ const HabitTrackerView: React.FC<{
     const [newHabitDuration, setNewHabitDuration] = useState('');
     const [newHabitTarget, setNewHabitTarget] = useState('1');
     const [newHabitInterval, setNewHabitInterval] = useState('2');
+    const [isAutoTrack, setIsAutoTrack] = useState(false);
+    const [autoTrackSteps, setAutoTrackSteps] = useState('10000');
 
     const [chatOpen, setChatOpen] = useState(false);
     const [chatInput, setChatInput] = useState('');
@@ -1817,6 +1926,8 @@ const HabitTrackerView: React.FC<{
         setNewHabitDuration('');
         setNewHabitTarget('1');
         setNewHabitInterval('2');
+        setIsAutoTrack(false);
+        setAutoTrackSteps('10000');
         setIsModalOpen(true);
     };
 
@@ -1827,6 +1938,13 @@ const HabitTrackerView: React.FC<{
         setNewHabitDuration(habit.durationMinutes?.toString() || '');
         setNewHabitTarget(habit.targetDaysPerWeek?.toString() || '1');
         setNewHabitInterval(habit.intervalDays?.toString() || '2');
+        if (habit.autoTracking && habit.autoTracking.type === 'STEPS') {
+            setIsAutoTrack(true);
+            setAutoTrackSteps(habit.autoTracking.targetValue.toString());
+        } else {
+            setIsAutoTrack(false);
+            setAutoTrackSteps('10000');
+        }
         setIsModalOpen(true);
     };
 
@@ -1850,7 +1968,8 @@ const HabitTrackerView: React.FC<{
             durationMinutes: parseInt(newHabitDuration) || 0,
             targetDaysPerWeek: parseInt(newHabitTarget) || 1,
             intervalDays: parseInt(newHabitInterval) || 2,
-            groupId: isGroup ? activeGroupId! : undefined
+            groupId: isGroup ? activeGroupId! : undefined,
+            autoTracking: isAutoTrack ? { type: 'STEPS', targetValue: parseInt(autoTrackSteps) || 10000 } : undefined
         };
 
         if (editingHabit) {
@@ -2269,6 +2388,33 @@ const HabitTrackerView: React.FC<{
                         value={newHabitDuration}
                         onChange={e => setNewHabitDuration(e.target.value)}
                     />
+
+                    <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100">
+                        <label className="flex items-center gap-2 cursor-pointer mb-2">
+                            <input
+                                type="checkbox"
+                                checked={isAutoTrack}
+                                onChange={e => setIsAutoTrack(e.target.checked)}
+                                className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
+                            />
+                            <span className="text-sm font-medium text-indigo-900">Auto-track with Google Fit</span>
+                        </label>
+
+                        {isAutoTrack && (
+                            <div className="pl-6 animate-in fade-in slide-in-from-top-2">
+                                <Input
+                                    label="Daily Step Goal"
+                                    type="number"
+                                    value={autoTrackSteps}
+                                    onChange={e => setAutoTrackSteps(e.target.value)}
+                                    placeholder="10000"
+                                />
+                                <p className="text-xs text-indigo-600 mt-1">
+                                    This habit will auto-complete when you reach this step count.
+                                </p>
+                            </div>
+                        )}
+                    </div>
 
                     <div className="flex gap-3 pt-4 border-t border-gray-100 mt-2">
                         {editingHabit && (

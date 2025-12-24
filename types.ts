@@ -19,6 +19,19 @@ export interface User {
   mobile?: string; // +91 format
   avatar: string;
   dailyReminderTime?: string; // HH:mm format, e.g. "09:00"
+  connectedApps?: {
+    googleFit?: {
+      connected: boolean;
+      lastSync: number;
+    };
+  };
+}
+
+export interface DailyMetric {
+  date: string; // YYYY-MM-DD
+  steps: number;
+  source: 'google-fit' | 'manual';
+  lastUpdated: number;
 }
 
 export interface Log {
@@ -41,6 +54,10 @@ export interface Habit {
   logs: Record<string, Log>; // Key is YYYY-MM-DD
   completed?: boolean; // If true, the habit is marked as finished/archived
   createdAt: number;
+  autoTracking?: {
+    type: 'STEPS';
+    targetValue: number;
+  };
 }
 
 export interface ChatMessage {
