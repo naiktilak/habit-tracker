@@ -39,7 +39,8 @@ import {
   Trophy,
   Medal,
   Award,
-  Zap
+  Zap,
+  Watch
 } from 'lucide-react';
 
 export const Icons = {
@@ -82,5 +83,6 @@ export const Icons = {
   Trophy,
   Medal,
   Award,
-  Zap
+  Zap,
+  Watch
 };
