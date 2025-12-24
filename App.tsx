@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { Routes, Route } from 'react-router-dom';
 import {
     BarChart,
     Bar,
@@ -31,16 +32,17 @@ import { collection, query, where, onSnapshot, doc, getDoc, getDocs } from 'fire
 import { User, Group, Habit, HabitStatus, HabitFrequency, ChatMessage, Notification, GroupJoinRequest, JoinRequestStatus, Achievement, Log, DailyMetric } from './types';
 import { MOTIVATIONAL_QUOTES } from './constants';
 import { loadGoogleScript, initTokenClient, requestGoogleAuth, handleAuthSuccess, disconnectGoogleFit } from './services/googleFitService';
-import { getAuthUrl, handleAuthCallback, isConnected as isFitbitConnected, disconnectFitbit, fetchTodaySteps as fetchFitbitSteps } from './services/fitbitService';
+import { getAuthUrl, isConnected as isFitbitConnected, disconnectFitbit, fetchTodaySteps as fetchFitbitSteps } from './services/fitbitService';
 import { Icons } from './components/Icons';
 import { Button, Input, Card, Modal } from './components/UI';
 import { useAuth } from "./AuthContext";
 import FirebaseLogin from "./FirebaseLogin";
 import { EmailVerification } from "./EmailVerification";
+import FitbitCallback from './components/FitbitCallback';
 
 // --- MAIN APP ---
 
-const App: React.FC = () => {
+const MainApp: React.FC = () => {
     const { user, loading, logout } = useAuth();
     const [showMobileMenu, setShowMobileMenu] = useState(false);
     const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
@@ -111,30 +113,15 @@ const App: React.FC = () => {
         }).catch(err => console.error(err));
     }, [currentUser]); // Re-init client if user changes (though script load is global)
 
-    // Handle Fitbit Auth Redirect & Initial Sync
+    // Handle Fitbit Initial Sync (Silent)
     useEffect(() => {
         if (!currentUser) return;
 
         const handleFitbit = async () => {
-            // 1. Check if returning from Auth
-            if (window.location.hash.includes('access_token') && window.location.hash.includes('user_id')) {
-                const success = await handleAuthCallback(window.location.hash, currentUser);
-                if (success) {
-                    // Clear hash to clean URL
-                    window.history.replaceState(null, '', window.location.pathname);
-                    // Fetch initial steps (Explicit user action, so always sync)
-                    setFitbitSyncLoading(true);
-                    try {
-                        const steps = await fetchFitbitSteps(currentUser);
-                        if (steps !== null) await evaluateStepHabits(currentUser, steps);
-                        setHasInitialFitbitSync(true); // Mark as done to prevent double sync
-                    } finally {
-                        setFitbitSyncLoading(false);
-                    }
-                }
-            }
-            // 2. Silent Sync on Load if connected
-            else if (currentUser.connectedApps?.fitbit?.connected && isFitbitConnected() && !hasInitialFitbitSync) {
+            // Note: Hash handling (auth callback) is now in FitbitCallback.tsx
+
+            // Silent Sync on Load if connected
+            if (currentUser.connectedApps?.fitbit?.connected && isFitbitConnected() && !hasInitialFitbitSync) {
                 // Priority Logic:
                 const isAndroid = /Android/.test(navigator.userAgent);
                 const googleConnected = currentUser.connectedApps?.googleFit?.connected;
@@ -2716,5 +2703,14 @@ const NavItem: React.FC<{ icon: React.ReactNode, label: string, isActive: boolea
         {label}
     </button>
 );
+
+const App: React.FC = () => {
+    return (
+        <Routes>
+            <Route path="/fitbit/callback" element={<FitbitCallback />} />
+            <Route path="*" element={<MainApp />} />
+        </Routes>
+    );
+};
 
 export default App;
