@@ -13,9 +13,13 @@ const STORAGE_KEY_TOKEN = 'fitbit_access_token';
 const STORAGE_KEY_EXPIRES = 'fitbit_token_expires_at';
 
 export const getAuthUrl = () => {
-    if (!CLIENT_ID || !REDIRECT_URI) {
-        console.error("Fitbit Client ID or Redirect URI not configured.");
-        return '#';
+    if (!CLIENT_ID) {
+        console.error("Fitbit Client ID not configured (VITE_FITBIT_CLIENT_ID)");
+        return null;
+    }
+    if (!REDIRECT_URI) {
+        console.error("Fitbit Redirect URI not configured (VITE_FITBIT_REDIRECT_URI)");
+        return null;
     }
     const params = new URLSearchParams({
         response_type: 'token',

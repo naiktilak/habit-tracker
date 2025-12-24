@@ -500,7 +500,11 @@ const App: React.FC = () => {
     };
 
     const handleGoogleConnect = () => {
-        requestGoogleAuth();
+        console.log("Connect Google Fit clicked");
+        const result = requestGoogleAuth();
+        if (!result.success) {
+            alert(result.error);
+        }
     };
 
     const handleGoogleDisconnect = async () => {
@@ -510,7 +514,13 @@ const App: React.FC = () => {
     };
 
     const handleFitbitConnect = () => {
-        window.location.href = getAuthUrl();
+        console.log("Connect Fitbit clicked");
+        const url = getAuthUrl();
+        if (url) {
+            window.location.href = url;
+        } else {
+            alert("Fitbit configuration missing. Please check console for details.");
+        }
     };
 
     const handleFitbitDisconnect = async () => {

@@ -48,11 +48,18 @@ export const initTokenClient = (callback: (response: any) => void) => {
 
 // 3. Trigger Auth Flow
 export const requestGoogleAuth = () => {
+  if (!CLIENT_ID) {
+    console.error("Google Client ID not configured (VITE_GOOGLE_CLIENT_ID)");
+    return { success: false, error: "Configuration missing: VITE_GOOGLE_CLIENT_ID" };
+  }
+
   if (tokenClient) {
     // Prompt the user to select an account and consent only if no valid token
     tokenClient.requestAccessToken();
+    return { success: true };
   } else {
     console.error("Token client not initialized");
+    return { success: false, error: "Google Identity Services not ready. Try again in a moment." };
   }
 };
 
