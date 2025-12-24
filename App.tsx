@@ -31,6 +31,7 @@ import { collection, query, where, onSnapshot, doc, getDoc, getDocs } from 'fire
 import { User, Group, Habit, HabitStatus, HabitFrequency, ChatMessage, Notification, GroupJoinRequest, JoinRequestStatus, Achievement, Log, DailyMetric } from './types';
 import { MOTIVATIONAL_QUOTES } from './constants';
 import { loadGoogleScript, initTokenClient, requestGoogleAuth, handleAuthSuccess, disconnectGoogleFit } from './services/googleFitService';
+import { getAuthUrl, handleAuthCallback, isConnected as isFitbitConnected, disconnectFitbit, fetchTodaySteps as fetchFitbitSteps } from './services/fitbitService';
 import { Icons } from './components/Icons';
 import { Button, Input, Card, Modal } from './components/UI';
 import { useAuth } from "./AuthContext";
@@ -72,6 +73,8 @@ const App: React.FC = () => {
     const [editProfileAvatar, setEditProfileAvatar] = useState('');
     const [editProfileReminder, setEditProfileReminder] = useState('');
     const [googleSyncLoading, setGoogleSyncLoading] = useState(false);
+    const [fitbitSyncLoading, setFitbitSyncLoading] = useState(false);
+    const [hasInitialFitbitSync, setHasInitialFitbitSync] = useState(false);
     const [isCreateGroupModalOpen, setIsCreateGroupModalOpen] = useState(false);
     const [newGroupName, setNewGroupName] = useState('');
     const [selectedFriendIds, setSelectedFriendIds] = useState<string[]>([]);
@@ -105,13 +108,59 @@ const App: React.FC = () => {
                     }
                 }
             });
-
-            // Silent Sync / Check: If connected, we might want to refresh but we can't without prompt usually.
-            // We rely on the stored connected state.
-            // If we wanted to attempt a silent refresh, we'd need a different flow or backend.
-            // For now, the user sees "Connected" based on Firestore.
         }).catch(err => console.error(err));
     }, [currentUser]); // Re-init client if user changes (though script load is global)
+
+    // Handle Fitbit Auth Redirect & Initial Sync
+    useEffect(() => {
+        if (!currentUser) return;
+
+        const handleFitbit = async () => {
+            // 1. Check if returning from Auth
+            if (window.location.hash.includes('access_token') && window.location.hash.includes('user_id')) {
+                const success = await handleAuthCallback(window.location.hash, currentUser);
+                if (success) {
+                    // Clear hash to clean URL
+                    window.history.replaceState(null, '', window.location.pathname);
+                    // Fetch initial steps (Explicit user action, so always sync)
+                    setFitbitSyncLoading(true);
+                    try {
+                        const steps = await fetchFitbitSteps(currentUser);
+                        if (steps !== null) await evaluateStepHabits(currentUser, steps);
+                        setHasInitialFitbitSync(true); // Mark as done to prevent double sync
+                    } finally {
+                        setFitbitSyncLoading(false);
+                    }
+                }
+            }
+            // 2. Silent Sync on Load if connected
+            else if (currentUser.connectedApps?.fitbit?.connected && isFitbitConnected() && !hasInitialFitbitSync) {
+                // Priority Logic:
+                const isAndroid = /Android/.test(navigator.userAgent);
+                const googleConnected = currentUser.connectedApps?.googleFit?.connected;
+
+                // Requirement: If both Google Fit and Fitbit are connected:
+                // On iOS -> Prefer Fitbit (Default behavior if not blocked below)
+                // On Android -> Prefer Google Fit
+
+                if (googleConnected && isAndroid) {
+                    console.log("Skipping Fitbit auto-sync on Android in favor of Google Fit.");
+                    setHasInitialFitbitSync(true); // Mark as checked
+                    return;
+                }
+
+                setFitbitSyncLoading(true);
+                try {
+                     const steps = await fetchFitbitSteps(currentUser);
+                     if (steps !== null) await evaluateStepHabits(currentUser, steps);
+                } finally {
+                     setFitbitSyncLoading(false);
+                     setHasInitialFitbitSync(true);
+                }
+            }
+        };
+        handleFitbit();
+    }, [currentUser, hasInitialFitbitSync]);
 
     useEffect(() => {
         if (!user) return;
@@ -458,6 +507,27 @@ const App: React.FC = () => {
         if (!currentUser) return;
         if (!window.confirm("Disconnect Google Fit? This will stop auto-tracking.")) return;
         await disconnectGoogleFit(currentUser);
+    };
+
+    const handleFitbitConnect = () => {
+        window.location.href = getAuthUrl();
+    };
+
+    const handleFitbitDisconnect = async () => {
+        if (!currentUser) return;
+        if (!window.confirm("Disconnect Fitbit? This will stop auto-tracking.")) return;
+        await disconnectFitbit(currentUser);
+    };
+
+    const handleFitbitSync = async () => {
+        if (!currentUser) return;
+        setFitbitSyncLoading(true);
+        try {
+            const steps = await fetchFitbitSteps(currentUser);
+            if (steps !== null) await evaluateStepHabits(currentUser, steps);
+        } finally {
+            setFitbitSyncLoading(false);
+        }
     };
 
     const openProfileModal = () => {
@@ -1131,20 +1201,53 @@ const App: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200 opacity-60">
+                        <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
                             <div className="flex items-center gap-3">
                                 <div className="p-2 bg-white rounded-md shadow-sm">
-                                    <Icons.Watch className="w-5 h-5 text-gray-400" />
+                                    <Icons.Watch className="w-5 h-5 text-indigo-600" />
                                 </div>
                                 <div>
-                                    <p className="text-sm font-medium text-gray-900">Fitbit</p>
-                                    <p className="text-xs text-gray-500">Coming soon</p>
+                                    <div className="flex items-center gap-2">
+                                        <p className="text-sm font-medium text-gray-900">Fitbit</p>
+                                        <span className="text-[10px] bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded font-medium">Recommended for iPhone</span>
+                                    </div>
+                                    {currentUser?.connectedApps?.fitbit?.connected ? (
+                                        <div className="flex flex-col">
+                                            <p className="text-xs text-green-600 flex items-center gap-1 font-medium">
+                                                <Icons.Check className="w-3 h-3" />
+                                                Connected
+                                            </p>
+                                            <p className="text-[10px] text-gray-400 mt-0.5">
+                                                Last sync: {currentUser.connectedApps.fitbit.lastSync ? format(currentUser.connectedApps.fitbit.lastSync, 'MMM d, h:mm a') : 'Just now'}
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <p className="text-xs text-gray-500">Sync steps from Fitbit</p>
+                                    )}
                                 </div>
                             </div>
                             <div>
-                                <Button type="button" variant="secondary" className="text-xs py-1 h-8" disabled>
-                                    Connect
-                                </Button>
+                                {currentUser?.connectedApps?.fitbit?.connected ? (
+                                    <div className="flex gap-2">
+                                        <Button
+                                            type="button"
+                                            variant="secondary"
+                                            className="text-xs py-1 h-8 px-2"
+                                            onClick={handleFitbitSync}
+                                            disabled={fitbitSyncLoading}
+                                            title="Sync Now"
+                                        >
+                                            <Icons.RefreshCw className={`w-3 h-3 ${fitbitSyncLoading ? 'animate-spin' : ''}`} />
+                                        </Button>
+                                        <Button type="button" variant="secondary" className="text-xs py-1 h-8" onClick={handleFitbitDisconnect}>
+                                            Disconnect
+                                        </Button>
+                                    </div>
+                                ) : (
+                                    <Button type="button" className="text-xs py-1 h-8" onClick={handleFitbitConnect} disabled={fitbitSyncLoading}>
+                                        {fitbitSyncLoading ? 'Connecting...' : 'Connect'}
+                                    </Button>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -2070,24 +2173,30 @@ const HabitTrackerView: React.FC<{
                                 </span>
                                 <span className="text-sm text-gray-500">steps</span>
                             </div>
-                            {todayMetric?.source === 'google-fit' && (
+                            {(todayMetric?.source === 'google-fit' || todayMetric?.source === 'fitbit') && (
                                 <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
                                     <Icons.CheckCircle className="w-3 h-3 text-green-500" />
-                                    Source: Google Fit
+                                    Source: {todayMetric.source === 'google-fit' ? 'Google Fit' : 'Fitbit'}
                                 </p>
                             )}
                             {/* Fallback / Helper Text if connected but 0 steps */}
-                            {currentUser.connectedApps?.googleFit?.connected && (todayMetric?.steps || 0) === 0 && (
+                            {(currentUser.connectedApps?.googleFit?.connected || currentUser.connectedApps?.fitbit?.connected) && (todayMetric?.steps || 0) === 0 && (
                                 <p className="text-xs text-orange-500 mt-1">
-                                    No step data yet. Carry your phone to record steps.
+                                    No step data yet. Ensure your device is syncing.
                                 </p>
                             )}
                         </div>
                     </div>
-                    {currentUser.connectedApps?.googleFit?.connected && (
+                    {(currentUser.connectedApps?.googleFit?.connected || currentUser.connectedApps?.fitbit?.connected) && (
                         <div className="text-right">
                             <p className="text-xs text-gray-400">
-                                Last sync: {currentUser.connectedApps.googleFit.lastSync ? format(currentUser.connectedApps.googleFit.lastSync, 'h:mm a') : '—'}
+                                Last sync: {
+                                    todayMetric?.source === 'fitbit' && currentUser.connectedApps?.fitbit?.lastSync
+                                        ? format(currentUser.connectedApps.fitbit.lastSync, 'h:mm a')
+                                        : currentUser.connectedApps?.googleFit?.lastSync
+                                            ? format(currentUser.connectedApps.googleFit.lastSync, 'h:mm a')
+                                            : '—'
+                                }
                             </p>
                         </div>
                     )}
@@ -2547,7 +2656,7 @@ const HabitTrackerView: React.FC<{
                                     placeholder="10000"
                                 />
                                 <p className="text-xs text-indigo-600 mt-1">
-                                    This habit will auto-complete when you reach this step count.
+                                    This habit will auto-complete when you reach this step count (via Google Fit or Fitbit).
                                 </p>
                             </div>
                         )}

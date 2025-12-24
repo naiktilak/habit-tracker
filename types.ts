@@ -24,13 +24,17 @@ export interface User {
       connected: boolean;
       lastSync: number;
     };
+    fitbit?: {
+      connected: boolean;
+      lastSync: number;
+    };
   };
 }
 
 export interface DailyMetric {
   date: string; // YYYY-MM-DD
   steps: number;
-  source: 'google-fit' | 'manual';
+  source: 'google-fit' | 'fitbit' | 'manual';
   lastUpdated: number;
 }
 
