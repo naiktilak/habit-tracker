@@ -54,7 +54,7 @@ const App: React.FC = () => {
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [joinRequests, setJoinRequests] = useState<GroupJoinRequest[]>([]);
     const [achievements, setAchievements] = useState<Achievement[]>([]);
-    const [dailyMetrics, setDailyMetrics] = useState<Record<string, number>>({});
+    const [dailyMetrics, setDailyMetrics] = useState<Record<string, DailyMetric>>({});
 
     // Derived State
     const habits = useMemo(() => {
@@ -90,27 +90,27 @@ const App: React.FC = () => {
     // --- INITIAL SYNC & LISTENERS ---
 
     useEffect(() => {
-      // Load Google Script
-      loadGoogleScript().then(() => {
-        initTokenClient(async (response) => {
-          if (currentUser && response.access_token) {
-             setGoogleSyncLoading(true);
-             try {
-                const steps = await handleAuthSuccess(response, currentUser);
-                if (steps !== null) {
-                    await evaluateStepHabits(currentUser, steps);
+        // Load Google Script
+        loadGoogleScript().then(() => {
+            initTokenClient(async (response) => {
+                if (currentUser && response.access_token) {
+                    setGoogleSyncLoading(true);
+                    try {
+                        const steps = await handleAuthSuccess(response, currentUser);
+                        if (steps !== null) {
+                            await evaluateStepHabits(currentUser, steps);
+                        }
+                    } finally {
+                        setGoogleSyncLoading(false);
+                    }
                 }
-             } finally {
-                setGoogleSyncLoading(false);
-             }
-          }
-        });
+            });
 
-        // Silent Sync / Check: If connected, we might want to refresh but we can't without prompt usually.
-        // We rely on the stored connected state.
-        // If we wanted to attempt a silent refresh, we'd need a different flow or backend.
-        // For now, the user sees "Connected" based on Firestore.
-      }).catch(err => console.error(err));
+            // Silent Sync / Check: If connected, we might want to refresh but we can't without prompt usually.
+            // We rely on the stored connected state.
+            // If we wanted to attempt a silent refresh, we'd need a different flow or backend.
+            // For now, the user sees "Connected" based on Firestore.
+        }).catch(err => console.error(err));
     }, [currentUser]); // Re-init client if user changes (though script load is global)
 
     useEffect(() => {
@@ -200,18 +200,18 @@ const App: React.FC = () => {
 
         // Listener B: Daily Metrics (Steps)
         const unsubMetrics = onSnapshot(collection(db, "users", myId, "dailyMetrics"), (snap) => {
-             setDailyMetrics(prev => {
-                 const next = { ...prev };
-                 snap.docChanges().forEach(change => {
-                     const data = change.doc.data() as DailyMetric;
-                     if (change.type === 'added' || change.type === 'modified') {
-                         next[data.date] = data.steps;
-                     } else if (change.type === 'removed') {
-                         delete next[data.date];
-                     }
-                 });
-                 return next;
-             });
+            setDailyMetrics(prev => {
+                const next = { ...prev };
+                snap.docChanges().forEach(change => {
+                    const data = change.doc.data() as DailyMetric;
+                    if (change.type === 'added' || change.type === 'modified') {
+                        next[data.date] = data;
+                    } else if (change.type === 'removed') {
+                        delete next[data.date];
+                    }
+                });
+                return next;
+            });
         });
 
         return () => {
@@ -344,11 +344,11 @@ const App: React.FC = () => {
                 if (isAfter(now, protectionTime)) {
                     const isDoneToday = habit.logs[todayStr]?.status === HabitStatus.DONE;
                     if (!isDoneToday && streak > 0) {
-                         const alertId = `streak-risk-${habit.id}-${todayStr}`;
-                         const alreadySent = notifications.some(n => n.id === alertId);
+                        const alertId = `streak-risk-${habit.id}-${todayStr}`;
+                        const alreadySent = notifications.some(n => n.id === alertId);
 
-                         if (!alreadySent) {
-                             newNotifications.push({
+                        if (!alreadySent) {
+                            newNotifications.push({
                                 id: alertId,
                                 userId: currentUser.id,
                                 message: `⚠️ You’re about to break a ${streak}-day streak on '${habit.title}'`,
@@ -800,7 +800,7 @@ const App: React.FC = () => {
         if (groupSnap.exists()) {
             const groupData = groupSnap.data() as Group;
             if (!groupData.members.includes(currentUser.id)) {
-                 await updateGroup(request.groupId, { members: [...groupData.members, currentUser.id] });
+                await updateGroup(request.groupId, { members: [...groupData.members, currentUser.id] });
             }
         }
 
@@ -1097,7 +1097,7 @@ const App: React.FC = () => {
                     <div className="space-y-4">
                         <h4 className="text-sm font-medium text-gray-700 mb-2">Integrations</h4>
                         <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
-                             <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-3">
                                 <div className="p-2 bg-white rounded-md shadow-sm">
                                     <Icons.Activity className="w-5 h-5 text-indigo-600" />
                                 </div>
@@ -1117,22 +1117,22 @@ const App: React.FC = () => {
                                         <p className="text-xs text-gray-500">Auto-track steps</p>
                                     )}
                                 </div>
-                             </div>
-                             <div>
-                                 {currentUser?.connectedApps?.googleFit?.connected ? (
-                                     <Button type="button" variant="secondary" className="text-xs py-1 h-8" onClick={handleGoogleDisconnect}>
-                                         Disconnect
-                                     </Button>
-                                 ) : (
-                                     <Button type="button" className="text-xs py-1 h-8" onClick={handleGoogleConnect} disabled={googleSyncLoading}>
-                                         {googleSyncLoading ? 'Connecting...' : 'Connect'}
-                                     </Button>
-                                 )}
-                             </div>
+                            </div>
+                            <div>
+                                {currentUser?.connectedApps?.googleFit?.connected ? (
+                                    <Button type="button" variant="secondary" className="text-xs py-1 h-8" onClick={handleGoogleDisconnect}>
+                                        Disconnect
+                                    </Button>
+                                ) : (
+                                    <Button type="button" className="text-xs py-1 h-8" onClick={handleGoogleConnect} disabled={googleSyncLoading}>
+                                        {googleSyncLoading ? 'Connecting...' : 'Connect'}
+                                    </Button>
+                                )}
+                            </div>
                         </div>
 
                         <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200 opacity-60">
-                             <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-3">
                                 <div className="p-2 bg-white rounded-md shadow-sm">
                                     <Icons.Watch className="w-5 h-5 text-gray-400" />
                                 </div>
@@ -1140,12 +1140,12 @@ const App: React.FC = () => {
                                     <p className="text-sm font-medium text-gray-900">Fitbit</p>
                                     <p className="text-xs text-gray-500">Coming soon</p>
                                 </div>
-                             </div>
-                             <div>
-                                 <Button type="button" variant="secondary" className="text-xs py-1 h-8" disabled>
-                                     Connect
-                                 </Button>
-                             </div>
+                            </div>
+                            <div>
+                                <Button type="button" variant="secondary" className="text-xs py-1 h-8" disabled>
+                                    Connect
+                                </Button>
+                            </div>
                         </div>
                     </div>
                 )}
@@ -1410,29 +1410,29 @@ const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], no
         const days = eachDayOfInterval({ start: startDate, end: endDate });
 
         myHabits.forEach(h => {
-             // For simplicity in overview, assume daily potential for all (refinement: check frequency)
-             // Or better: count logs that exist in that window vs completions
-             // Given existing data structure relies on logs being created only when actioned,
-             // "Possible" is tricky. Let's use the standard "logs existing" approach for rate
-             // OR strictly check frequency. Let's stick to logs for consistency with existing rate.
-             // Wait, existing rate was All Time.
-             // Request is "Weekly Completion Percentage".
-             // If I only count logs, a lazy user has 0/0 = 0%.
-             // Better: Iterate days and check if habit SHOULD occur.
-             days.forEach(day => {
-                 const dStr = format(day, 'yyyy-MM-dd');
-                 // Simply check if log exists and is done
-                 if (h.logs[dStr]) {
-                     possible++;
-                     if (h.logs[dStr].status === HabitStatus.DONE) actual++;
-                 } else if (h.frequency === HabitFrequency.DAILY) {
-                      // If daily and no log, it's missed (simplified for overview)
-                      possible++;
-                 }
-                 // Weekly/Interval is harder to guess "possible" without complex logic.
-                 // Falling back to "Total Logs" method used in previous version but constrained to date range
-                 // to ensure we compare apples to apples.
-             });
+            // For simplicity in overview, assume daily potential for all (refinement: check frequency)
+            // Or better: count logs that exist in that window vs completions
+            // Given existing data structure relies on logs being created only when actioned,
+            // "Possible" is tricky. Let's use the standard "logs existing" approach for rate
+            // OR strictly check frequency. Let's stick to logs for consistency with existing rate.
+            // Wait, existing rate was All Time.
+            // Request is "Weekly Completion Percentage".
+            // If I only count logs, a lazy user has 0/0 = 0%.
+            // Better: Iterate days and check if habit SHOULD occur.
+            days.forEach(day => {
+                const dStr = format(day, 'yyyy-MM-dd');
+                // Simply check if log exists and is done
+                if (h.logs[dStr]) {
+                    possible++;
+                    if (h.logs[dStr].status === HabitStatus.DONE) actual++;
+                } else if (h.frequency === HabitFrequency.DAILY) {
+                    // If daily and no log, it's missed (simplified for overview)
+                    possible++;
+                }
+                // Weekly/Interval is harder to guess "possible" without complex logic.
+                // Falling back to "Total Logs" method used in previous version but constrained to date range
+                // to ensure we compare apples to apples.
+            });
         });
         // Actually, let's look at the existing implementation of "rate":
         // const totalLogs = habits...reduce...Object.keys(h.logs).length
@@ -1445,11 +1445,11 @@ const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], no
 
         myHabits.forEach(h => {
             Object.values(h.logs).forEach((log: Log) => {
-                 const logDate = parseISO(log.date);
-                 if (logDate >= startDate && logDate <= endDate) {
-                     rangeLogs++;
-                     if (log.status === HabitStatus.DONE) rangeDone++;
-                 }
+                const logDate = parseISO(log.date);
+                if (logDate >= startDate && logDate <= endDate) {
+                    rangeLogs++;
+                    if (log.status === HabitStatus.DONE) rangeDone++;
+                }
             });
         });
 
@@ -1497,13 +1497,13 @@ const DashboardView: React.FC<{ user: User, habits: Habit[], groups: Group[], no
 
                         <div className="mt-4 pt-4 border-t border-indigo-400/30">
                             <h3 className="text-indigo-100 font-medium mb-1 text-sm">Monthly Trend</h3>
-                             <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2">
                                 <span className="text-xl font-bold">{thisMonthRate}%</span>
                                 <span className={`text-xs font-bold ${monthlyDiff >= 0 ? 'text-green-300' : 'text-red-300'}`}>
                                     {monthlyDiff >= 0 ? '▲' : '▼'} {Math.abs(monthlyDiff)}%
                                 </span>
-                             </div>
-                             <div className="text-xs text-indigo-200">vs last month</div>
+                            </div>
+                            <div className="text-xs text-indigo-200">vs last month</div>
                         </div>
                     </div>
                 </Card>
@@ -1633,7 +1633,7 @@ const HabitTrackerView: React.FC<{
     onSendMessage: (t: string) => void;
     onOpenInvite?: () => void;
     onOpenManageGroup?: () => void;
-    dailyMetrics: Record<string, number>;
+    dailyMetrics: Record<string, DailyMetric>;
 }> = ({ isGroup, activeGroupId, habits, setHabits, users, groups, currentUser, selectedDate, setSelectedDate, onToggleStatus, onToggleCompletion, onAddHabit, onGetAI, aiInsight, isAiLoading, setAiInsight, messages, onSendMessage, onOpenInvite, onOpenManageGroup, dailyMetrics }) => {
 
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -2046,8 +2046,54 @@ const HabitTrackerView: React.FC<{
 
     const currentGroupMessages = messages.filter(m => m.groupId === activeGroupId);
 
+    // Prepare Daily Activity Data for Personal View
+    const todayStr = format(selectedDate, 'yyyy-MM-dd');
+    const todayMetric = dailyMetrics[todayStr];
+    const isToday = isSameDay(selectedDate, new Date());
+
     return (
         <div className="space-y-6">
+            {/* Today's Activity Card (Personal Space Only) */}
+            {!isGroup && (
+                <div className="bg-white p-4 rounded-xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+                    <div className="flex items-center gap-4">
+                        <div className="p-3 bg-indigo-50 rounded-full">
+                            <Icons.Activity className="w-6 h-6 text-indigo-600" />
+                        </div>
+                        <div>
+                            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">
+                                {isToday ? "Today's Activity" : `Activity on ${format(selectedDate, 'MMM d')}`}
+                            </h3>
+                            <div className="flex items-baseline gap-2">
+                                <span className="text-2xl font-bold text-gray-900">
+                                    {(todayMetric?.steps || 0).toLocaleString()}
+                                </span>
+                                <span className="text-sm text-gray-500">steps</span>
+                            </div>
+                            {todayMetric?.source === 'google-fit' && (
+                                <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+                                    <Icons.CheckCircle className="w-3 h-3 text-green-500" />
+                                    Source: Google Fit
+                                </p>
+                            )}
+                            {/* Fallback / Helper Text if connected but 0 steps */}
+                            {currentUser.connectedApps?.googleFit?.connected && (todayMetric?.steps || 0) === 0 && (
+                                <p className="text-xs text-orange-500 mt-1">
+                                    No step data yet. Carry your phone to record steps.
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                    {currentUser.connectedApps?.googleFit?.connected && (
+                        <div className="text-right">
+                            <p className="text-xs text-gray-400">
+                                Last sync: {currentUser.connectedApps.googleFit.lastSync ? format(currentUser.connectedApps.googleFit.lastSync, 'h:mm a') : '—'}
+                            </p>
+                        </div>
+                    )}
+                </div>
+            )}
+
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-xl shadow-sm">
                 <div className="flex items-center gap-2">
                     <button onClick={() => setSelectedDate(addWeeks(selectedDate, -1))} className="p-1 hover:bg-gray-100 rounded">
@@ -2266,13 +2312,14 @@ const HabitTrackerView: React.FC<{
                                                                         // Step Habit Logic
                                                                         const isStepHabit = habit.autoTracking?.type === 'STEPS';
                                                                         const stepTarget = habit.autoTracking?.targetValue || 0;
-                                                                        const daySteps = dailyMetrics[dStr] || 0;
+                                                                        const metric = dailyMetrics[dStr];
+                                                                        const daySteps = metric?.steps || 0;
                                                                         const stepProgress = Math.min(100, (daySteps / stepTarget) * 100);
 
                                                                         if (isStepHabit && isMe) {
                                                                             return (
                                                                                 <td key={dStr} className="text-center p-1 w-32 align-middle">
-                                                                                     <div className="flex flex-col items-center justify-center gap-1 w-full max-w-[120px] mx-auto">
+                                                                                    <div className="flex flex-col items-center justify-center gap-1 w-full max-w-[120px] mx-auto">
                                                                                         <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
                                                                                             <div
                                                                                                 className={`h-full rounded-full transition-all duration-500 ${isDone ? 'bg-green-500' : 'bg-indigo-500'}`}
@@ -2292,7 +2339,7 @@ const HabitTrackerView: React.FC<{
                                                                                                 Mark Done
                                                                                             </button>
                                                                                         )}
-                                                                                     </div>
+                                                                                    </div>
                                                                                 </td>
                                                                             );
                                                                         }

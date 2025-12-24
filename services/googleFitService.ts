@@ -149,17 +149,22 @@ export const disconnectGoogleFit = async (user: User) => {
 
 export const handleAuthSuccess = async (tokenResponse: any, user: User) => {
   if (tokenResponse && tokenResponse.access_token) {
-    const steps = await fetchTodaySteps(tokenResponse.access_token);
-    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    let steps = 0;
+    try {
+      steps = await fetchTodaySteps(tokenResponse.access_token);
 
-    const metric: DailyMetric = {
-      date: todayStr,
-      steps: steps,
-      source: 'google-fit',
-      lastUpdated: Date.now()
-    };
-
-    await upsertDailyMetric(user.id, metric);
+      const todayStr = format(new Date(), 'yyyy-MM-dd');
+      const metric: DailyMetric = {
+        date: todayStr,
+        steps: steps,
+        source: 'google-fit',
+        lastUpdated: Date.now()
+      };
+      await upsertDailyMetric(user.id, metric);
+    } catch (error) {
+      console.warn("Failed to fetch steps after auth, but marking as connected.", error);
+      // We continue to mark as connected because OAuth succeeded.
+    }
 
     // Update User Profile with connection status
     // Ensure we merge with existing connectedApps to avoid overwriting other potential apps
